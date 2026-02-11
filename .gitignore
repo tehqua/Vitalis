@@ -1,0 +1,8 @@
+.env
+venv/ 
+/medgemma/google_medgemma_4b_it/
+/agents/image_process/data/outputs/ 
+/agents/image_process/data/pediatric_skin_data/
+/agents/patient_database/data/csv/ 
+/agents/speech_to_text_process/model/medasr/ 
+__pycache__/
