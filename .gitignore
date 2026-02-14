@@ -6,3 +6,5 @@ venv/
 /agents/patient_database/data/csv/ 
 /agents/speech_to_text_process/model/medasr/ 
 __pycache__/
+/agents/patient_database/data/vectordb/
+/agents/patient_database/medical_record/
