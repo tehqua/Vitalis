@@ -8,3 +8,7 @@ venv/
 __pycache__/
 /agents/patient_database/data/vectordb/
 /agents/patient_database/medical_record/
+/agents/orchestrator/tests/__pycache__/
+/agents/orchestrator/__pycache__/
+/agents/orchestrator/htmlcov/
+/agents/orchestrator/.pytest_cache/
