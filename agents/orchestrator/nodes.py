@@ -264,7 +264,16 @@ class WorkflowNodes:
         # Build messages for LLM
         from .prompts import MASTER_SYSTEM_PROMPT
         
-        messages = [{"role": "system", "content": MASTER_SYSTEM_PROMPT}]
+        patient_id = state.get("patient_id", "") 
+        patient_context = f"""
+        AUTHENTICATION STATUS: Patient is ALREADY logged in and verified.
+        - Patient ID: {patient_id}
+        - DO NOT ask for name, date of birth, or any identity verification
+        - Use this patient_id directly when querying medical records
+        - You already have full access to this patient's data
+        """
+
+        messages = [{"role": "system", "content": MASTER_SYSTEM_PROMPT + "\n\n" + patient_context}]
         
         # Add context
         if context_parts:

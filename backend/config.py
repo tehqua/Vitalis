@@ -46,7 +46,7 @@ class Settings(BaseSettings):
         env="ALLOWED_IMAGE_EXTENSIONS"
     )
     ALLOWED_AUDIO_EXTENSIONS: List[str] = Field(
-        default=[".wav", ".mp3", ".m4a", ".ogg"],
+        default=[".wav", ".mp3", ".m4a", ".ogg", ".webm"],
         env="ALLOWED_AUDIO_EXTENSIONS"
     )
     

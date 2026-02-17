@@ -152,7 +152,7 @@ class FileValidator:
     
     # Allowed extensions
     IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
-    AUDIO_EXTENSIONS = {'.wav', '.mp3', '.m4a', '.ogg'}
+    AUDIO_EXTENSIONS = {'.wav', '.mp3', '.m4a', '.ogg', '.webm'}
     
     # Magic numbers for file type detection
     IMAGE_MAGIC_NUMBERS = {

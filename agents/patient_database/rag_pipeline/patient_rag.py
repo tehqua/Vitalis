@@ -6,7 +6,8 @@ import requests
 from typing import List, Dict
 import re
 
-VECTOR_DB_DIR = "../data/vectordb"
+VECTOR_DB_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "vectordb")
+VECTOR_DB_DIR = os.path.abspath(VECTOR_DB_DIR)
 
 OLLAMA_EMBED_URL = "http://localhost:11434/api/embeddings"
 OLLAMA_EMBED_MODEL = "nomic-embed-text"

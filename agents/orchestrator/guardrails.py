@@ -249,7 +249,7 @@ class InputValidator:
     """Validator for user inputs (files, patient IDs, etc.)"""
     
     ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
-    ALLOWED_AUDIO_EXTENSIONS = {'.wav', '.mp3', '.m4a', '.ogg'}
+    ALLOWED_AUDIO_EXTENSIONS = {'.wav', '.mp3', '.m4a', '.ogg', '.webm'}
     MAX_IMAGE_SIZE_MB = 10
     MAX_AUDIO_SIZE_MB = 50
     

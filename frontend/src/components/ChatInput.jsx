@@ -183,6 +183,43 @@ const s = {
   },
 };
 
+function encodeWAV(audioBuffer) {
+  const numChannels = 1;
+  const sampleRate = audioBuffer.sampleRate;
+  const samples = audioBuffer.getChannelData(0);
+  
+  const int16 = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  
+  const buffer = new ArrayBuffer(44 + int16.byteLength);
+  const view = new DataView(buffer);
+  
+  function writeString(offset, str) {
+    for (let i = 0; i < str.length; i++)
+      view.setUint8(offset + i, str.charCodeAt(i));
+  }
+  
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + int16.byteLength, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, int16.byteLength, true);
+  new Int16Array(buffer, 44).set(int16);
+  
+  return buffer;
+}
+
 export default function ChatInput({ onSendText, onSendImage, onSendAudio, disabled }) {
   const [text, setText] = useState("");
   const [focused, setFocused] = useState(false);
@@ -238,35 +275,57 @@ export default function ChatInput({ onSendText, onSendImage, onSendAudio, disabl
   }
 
   async function toggleRecording() {
-    if (recording) {
-      // Stop
-      mediaRecorderRef.current?.stop();
-      setRecording(false);
-      return;
-    }
+      if (recording) {
+        mediaRecorderRef.current?.stop();
+        setRecording(false);
+        return;
+      }
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      audioChunksRef.current = [];
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
+        const mimeType = MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
+          ? "audio/ogg;codecs=opus"
+          : MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
+          : "audio/webm";
 
-      recorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        const file = new File([blob], "recording.webm", { type: "audio/webm" });
-        onSendAudio(file);
-        stream.getTracks().forEach((t) => t.stop());
-      };
+        const recorder = new MediaRecorder(stream, { mimeType });
+        audioChunksRef.current = [];
 
-      mediaRecorderRef.current = recorder;
-      recorder.start();
-      setRecording(true);
-    } catch {
-      alert("Microphone access is required for voice messages.");
-    }
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) audioChunksRef.current.push(e.data);
+        };
+
+        recorder.onstop = async () => {
+          const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+
+          try {
+            // Convert webm → wav để librosa đọc được
+            const arrayBuffer = await blob.arrayBuffer();
+            const audioCtx = new AudioContext({ sampleRate: 16000 });
+            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+            const wavBuffer = encodeWAV(audioBuffer);
+            const wavBlob = new Blob([wavBuffer], { type: "audio/wav" });
+            const file = new File([wavBlob], "recording.wav", { type: "audio/wav" });
+            onSendAudio(file);
+            audioCtx.close();
+          } catch (err) {
+            // Fallback nếu convert thất bại
+            console.error("WAV convert failed:", err);
+            const file = new File([blob], "recording.webm", { type: "audio/webm" });
+            onSendAudio(file);
+          }
+
+          stream.getTracks().forEach((t) => t.stop());
+        };
+
+        mediaRecorderRef.current = recorder;
+        recorder.start();
+        setRecording(true);
+      } catch {
+        alert("Microphone access is required for voice messages.");
+      }
   }
 
   const canSend = !disabled && (text.trim().length > 0 || pendingImage != null);

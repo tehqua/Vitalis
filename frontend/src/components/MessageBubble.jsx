@@ -268,10 +268,12 @@ function AssistantCard({ message }) {
         </div>
 
         {/* Main response text — render as plain text preserving newlines */}
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-        {message.content}
-        </ReactMarkdown>
-
+        <div className="markdown-body">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {message.content}
+          </ReactMarkdown>
+        </div>
+        
         {/* Image analysis confidence */}
         {confidence != null && (
           <p style={s.confidence}>
