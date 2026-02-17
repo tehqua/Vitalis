@@ -272,14 +272,34 @@ class WorkflowNodes:
                 "role": "system",
                 "content": "\n\n".join(context_parts)
             })
-        
+        """
         # Add conversation history
         for msg in state.get("messages", [])[-5:]:  # Last 5 messages
             messages.append({
                 "role": msg["role"],
                 "content": msg["content"]
             })
-        
+        """ 
+        # Add conversation history
+        for msg in state.get("messages", [])[-5:]:  # Last 5 messages
+            if isinstance(msg, dict):
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+            else:
+                # LangChain message objects (HumanMessage, AIMessage, v.v.)
+                from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+                if isinstance(msg, HumanMessage):
+                    role = "user"
+                elif isinstance(msg, AIMessage):
+                    role = "assistant"
+                elif isinstance(msg, SystemMessage):
+                    role = "system"
+                else:
+                    role = "user"
+                content = msg.content
+            
+            messages.append({"role": role, "content": content})
+            
         # Add current user input
         messages.append({
             "role": "user",

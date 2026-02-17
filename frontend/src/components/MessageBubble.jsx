@@ -7,6 +7,8 @@
  */
 
 import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const s = {
   row: {
@@ -266,7 +268,9 @@ function AssistantCard({ message }) {
         </div>
 
         {/* Main response text — render as plain text preserving newlines */}
-        <div style={{ whiteSpace: "pre-wrap" }}>{message.content}</div>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {message.content}
+        </ReactMarkdown>
 
         {/* Image analysis confidence */}
         {confidence != null && (
