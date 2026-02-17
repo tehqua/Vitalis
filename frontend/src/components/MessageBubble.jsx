@@ -246,7 +246,6 @@ function AssistantCard({ message }) {
               <span className="material-symbols-outlined" style={{ fontSize: "0.8rem" }}>
                 view_in_ar
               </span>
-              DermFoundation Analysis
             </span>
           )}
           {isAudio && (
@@ -254,7 +253,6 @@ function AssistantCard({ message }) {
               <span className="material-symbols-outlined" style={{ fontSize: "0.8rem" }}>
                 record_voice_over
               </span>
-              Speech Transcription
             </span>
           )}
           {!isMultimodal && !isAudio && (
@@ -262,7 +260,6 @@ function AssistantCard({ message }) {
               <span className="material-symbols-outlined" style={{ fontSize: "0.8rem" }}>
                 database
               </span>
-              Patient Records
             </span>
           )}
         </div>
@@ -301,39 +298,6 @@ function AssistantCard({ message }) {
       </div>
 
       {/* Quick-action buttons */}
-      <div style={s.suggestionsRow}>
-        <button
-          style={s.actionBtn}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "#0f766e";
-            e.currentTarget.style.transform = "translateY(-1px)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "#0d9488";
-            e.currentTarget.style.transform = "translateY(0)";
-          }}
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: "1rem" }}>
-            calendar_add_on
-          </span>
-          Book Appointment
-        </button>
-        {!isMultimodal && (
-          <button
-            style={s.suggestionBtn}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.9)";
-              e.currentTarget.style.color = "#0d9488";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.65)";
-              e.currentTarget.style.color = "#475569";
-            }}
-          >
-            Upload a photo
-          </button>
-        )}
-      </div>
     </>
   );
 }

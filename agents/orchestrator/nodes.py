@@ -422,7 +422,7 @@ class WorkflowNodes:
             )
         
         # Add medical disclaimer
-        response = self.guardrails.add_medical_disclaimer(response)
+        # response = self.guardrails.add_medical_disclaimer(response)
         
         # Clean response
         response = clean_response(response)

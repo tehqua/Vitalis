@@ -6,6 +6,7 @@
  * - Appending the user bubble immediately (optimistic UI)
  * - Appending the assistant reply when the API responds
  * - Error handling
+ * - loadMessages: load history from backend into feed
  */
 
 import { useState, useCallback, useRef } from "react";
@@ -35,6 +36,15 @@ export function useChat() {
       return copy;
     });
   }
+
+  /**
+   * Load a list of existing messages into feed (used for View History).
+   * Each message must have: { id, role, content, timestamp }
+   * @param {Array} msgs
+   */
+  const loadMessages = useCallback((msgs) => {
+    setMessages(msgs);
+  }, []);
 
   /**
    * Sends a text-only message.
@@ -141,5 +151,5 @@ export function useChat() {
     setMessages([]);
   }, []);
 
-  return { messages, loading, sendText, sendImage, sendAudio, clearMessages };
+  return { messages, loading, sendText, sendImage, sendAudio, clearMessages, loadMessages };
 }

@@ -5,13 +5,13 @@
  * Layout: Sidebar (left) + main area (header + scrollable messages + compose bar).
  */
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import MessageBubble from "../components/MessageBubble";
 import ChatInput from "../components/ChatInput";
 import { useChat } from "../hooks/useChat";
-import { patientInitials } from "../services/api";
+import { getHistory } from "../services/api";
 
 const s = {
   root: {
@@ -112,14 +112,58 @@ function getGreeting() {
 
 function getFirstName(patientId) {
   if (!patientId) return "";
-  // Extract the name portion before the digits, e.g. "Adam631" -> "Adam"
   const segment = patientId.split("_")[0] || "";
   return segment.replace(/\d+$/, "");
 }
 
+/**
+ * Convert conversation history from backend into a list of "sessions" for Sidebar.
+ * Backend returns messages like: [{role:"user", content, timestamp}, {role:"assistant", ...}]
+ * Group by date and use the first user message as the title.
+ */
+function buildHistoryItems(messages) {
+  if (!messages || messages.length === 0) return [];
+
+  // Get user messages, use content as title
+  const userMessages = messages.filter((m) => m.role === "user");
+
+  // Deduplicate by date + content, take maximum 8 most recent items
+  const seen = new Set();
+  const items = [];
+
+  for (const msg of [...userMessages].reverse()) {
+    const date = new Date(msg.timestamp);
+    const dateKey = date.toLocaleDateString("vi-VN", {
+      day: "2-digit",
+      month: "2-digit",
+    });
+
+    // Truncate title if too long
+    const title =
+      msg.content.length > 40
+        ? msg.content.slice(0, 40) + "…"
+        : msg.content;
+
+    const key = `${dateKey}-${title}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      items.push({ title, dateKey, timestamp: msg.timestamp });
+    }
+
+    if (items.length >= 8) break;
+  }
+
+  return items;
+}
+
 export default function ChatPage({ patientId, onLogout }) {
-  const { messages, loading, sendText, sendImage, sendAudio, clearMessages } = useChat();
+  const { messages, loading, sendText, sendImage, sendAudio, clearMessages, loadMessages } =
+    useChat();
   const feedRef = useRef(null);
+
+  // History to show in Sidebar
+  const [historyItems, setHistoryItems] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -127,6 +171,64 @@ export default function ChatPage({ patientId, onLogout }) {
       feedRef.current.scrollTop = feedRef.current.scrollHeight;
     }
   }, [messages]);
+
+  // Fetch history when component mounts
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  // After each successful message send, refresh sidebar history
+  useEffect(() => {
+    if (!loading && messages.length > 0) {
+      fetchHistory();
+    }
+  }, [loading]);
+
+  async function fetchHistory() {
+    try {
+      setHistoryLoading(true);
+      const data = await getHistory(50);
+      const items = buildHistoryItems(data.messages || []);
+      setHistoryItems(items);
+    } catch (err) {
+      // If no history or error, leave empty
+      console.warn("Could not load history:", err.message);
+      setHistoryItems([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  /**
+   * When user clicks "Previous Consults" in Sidebar:
+   * Load the entire history into the main feed.
+   */
+  const handleViewHistory = useCallback(async () => {
+    try {
+      const data = await getHistory(50);
+      const msgs = data.messages || [];
+
+      if (msgs.length === 0) {
+        // No history, do nothing
+        return;
+      }
+
+      // Convert backend format → useChat messages format
+      // Backend: [{role, content, timestamp, metadata?}]
+      const formatted = msgs.map((m, idx) => ({
+        id: `history-${idx}`,
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+        metadata: m.metadata || {},
+        pending: false,
+      }));
+
+      loadMessages(formatted);
+    } catch (err) {
+      console.error("Failed to load history:", err.message);
+    }
+  }, [loadMessages]);
 
   function handleNewConsult() {
     clearMessages();
@@ -137,7 +239,13 @@ export default function ChatPage({ patientId, onLogout }) {
 
   return (
     <div style={s.root}>
-      <Sidebar onNewConsult={handleNewConsult} onLogout={onLogout} />
+      <Sidebar
+        onNewConsult={handleNewConsult}
+        onLogout={onLogout}
+        onViewHistory={handleViewHistory}
+        historyItems={historyItems}
+        historyLoading={historyLoading}
+      />
 
       <main style={s.main}>
         <TopBar patientId={patientId} />

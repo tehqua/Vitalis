@@ -432,24 +432,6 @@ export default function ChatInput({ onSendText, onSendImage, onSendAudio, disabl
 
               <div style={s.divider} />
 
-              {/* Attach record button */}
-              <button
-                style={s.attachRecordBtn}
-                disabled={disabled}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "#f1f5f9";
-                  e.currentTarget.style.color = "#334155";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "#f8fafc";
-                  e.currentTarget.style.color = "#64748b";
-                }}
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: "0.875rem" }}>
-                  folder_shared
-                </span>
-                Attach Record
-              </button>
             </div>
 
             {/* Send button */}
