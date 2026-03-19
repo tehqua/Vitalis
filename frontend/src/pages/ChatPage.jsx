@@ -11,7 +11,7 @@ import TopBar from "../components/TopBar";
 import MessageBubble from "../components/MessageBubble";
 import ChatInput from "../components/ChatInput";
 import { useChat } from "../hooks/useChat";
-import { getHistory } from "../services/api";
+import { getSessions, getSessionHistory } from "../services/api";
 
 const s = {
   root: {
@@ -117,43 +117,31 @@ function getFirstName(patientId) {
 }
 
 /**
- * Convert conversation history from backend into a list of "sessions" for Sidebar.
- * Backend returns messages like: [{role:"user", content, timestamp}, {role:"assistant", ...}]
- * Group by date and use the first user message as the title.
+ * Build sidebar history items from the sessions API response.
+ * Each session becomes one clickable entry.
  */
-function buildHistoryItems(messages) {
-  if (!messages || messages.length === 0) return [];
+function buildHistoryItems(sessions) {
+  if (!sessions || sessions.length === 0) return [];
 
-  // Get user messages, use content as title
-  const userMessages = messages.filter((m) => m.role === "user");
-
-  // Deduplicate by date + content, take maximum 8 most recent items
-  const seen = new Set();
-  const items = [];
-
-  for (const msg of [...userMessages].reverse()) {
-    const date = new Date(msg.timestamp);
+  return sessions.map((s) => {
+    const date = s.started_at ? new Date(s.started_at) : new Date();
     const dateKey = date.toLocaleDateString("vi-VN", {
       day: "2-digit",
       month: "2-digit",
     });
-
-    // Truncate title if too long
     const title =
-      msg.content.length > 40
-        ? msg.content.slice(0, 40) + "…"
-        : msg.content;
+      s.first_message && s.first_message.length > 40
+        ? s.first_message.slice(0, 40) + "…"
+        : s.first_message || "(empty session)";
 
-    const key = `${dateKey}-${title}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      items.push({ title, dateKey, timestamp: msg.timestamp });
-    }
-
-    if (items.length >= 8) break;
-  }
-
-  return items;
+    return {
+      session_id: s.session_id,
+      title,
+      dateKey,
+      message_count: s.message_count,
+      timestamp: s.started_at,
+    };
+  });
 }
 
 export default function ChatPage({ patientId, onLogout }) {
@@ -187,12 +175,11 @@ export default function ChatPage({ patientId, onLogout }) {
   async function fetchHistory() {
     try {
       setHistoryLoading(true);
-      const data = await getHistory(50);
-      const items = buildHistoryItems(data.messages || []);
+      const data = await getSessions(20);
+      const items = buildHistoryItems(data.sessions || []);
       setHistoryItems(items);
     } catch (err) {
-      // If no history or error, leave empty
-      console.warn("Could not load history:", err.message);
+      console.warn("Could not load sessions:", err.message);
       setHistoryItems([]);
     } finally {
       setHistoryLoading(false);
@@ -200,35 +187,36 @@ export default function ChatPage({ patientId, onLogout }) {
   }
 
   /**
-   * When user clicks "Previous Consults" in Sidebar:
-   * Load the entire history into the main feed.
+   * When user clicks a session item in the Sidebar:
+   * Load that session's full message history into the main feed.
    */
-  const handleViewHistory = useCallback(async () => {
+  const handleSelectSession = useCallback(async (sessionId) => {
     try {
-      const data = await getHistory(50);
+      const data = await getSessionHistory(sessionId);
       const msgs = data.messages || [];
+      if (msgs.length === 0) return;
 
-      if (msgs.length === 0) {
-        // No history, do nothing
-        return;
-      }
-
-      // Convert backend format → useChat messages format
-      // Backend: [{role, content, timestamp, metadata?}]
       const formatted = msgs.map((m, idx) => ({
-        id: `history-${idx}`,
+        id: `hist-${sessionId}-${idx}`,
         role: m.role,
         content: m.content,
         timestamp: m.timestamp,
         metadata: m.metadata || {},
         pending: false,
       }));
-
       loadMessages(formatted);
     } catch (err) {
-      console.error("Failed to load history:", err.message);
+      console.error("Failed to load session history:", err.message);
     }
   }, [loadMessages]);
+
+  /**
+   * When user clicks "Previous Consults" nav button:
+   * Refresh session list in sidebar (already loaded, but force refresh).
+   */
+  const handleViewHistory = useCallback(async () => {
+    await fetchHistory();
+  }, []);
 
   function handleNewConsult() {
     clearMessages();
@@ -243,6 +231,7 @@ export default function ChatPage({ patientId, onLogout }) {
         onNewConsult={handleNewConsult}
         onLogout={onLogout}
         onViewHistory={handleViewHistory}
+        onSelectSession={handleSelectSession}
         historyItems={historyItems}
         historyLoading={historyLoading}
       />

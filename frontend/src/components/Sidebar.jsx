@@ -144,6 +144,7 @@ export default function Sidebar({
   onNewConsult,
   onLogout,
   onViewHistory,
+  onSelectSession,
   historyItems = [],
   historyLoading = false,
 }) {
@@ -238,12 +239,16 @@ export default function Sidebar({
         ) : (
           historyItems.map((item, idx) => (
             <button
-              key={idx}
+              key={item.session_id || idx}
               style={s.historyLink}
               title={item.title}
               onClick={() => {
                 setActive("consults");
-                if (onViewHistory) onViewHistory();
+                if (onSelectSession && item.session_id) {
+                  onSelectSession(item.session_id);
+                } else if (onViewHistory) {
+                  onViewHistory();
+                }
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.color = "#0d9488";
@@ -255,7 +260,14 @@ export default function Sidebar({
               }}
             >
               <span style={s.historyTitle}>{item.title}</span>
-              <span style={s.historyDate}>{item.dateKey}</span>
+              <span style={s.historyDate}>
+                {item.dateKey}
+                {item.message_count > 0 && (
+                  <span style={{ marginLeft: "0.4rem", color: "#94a3b8" }}>
+                    · {item.message_count} msg{item.message_count !== 1 ? "s" : ""}
+                  </span>
+                )}
+              </span>
             </button>
           ))
         )}

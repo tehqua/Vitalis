@@ -160,6 +160,28 @@ export async function getHistory(limit = 50) {
 }
 
 /**
+ * Fetches all chat sessions for the current patient (newest first).
+ * Each item: { session_id, first_message, started_at, last_activity, message_count }
+ *
+ * @param {number} limit
+ * @returns {Promise<{patient_id, sessions, total}>}
+ */
+export async function getSessions(limit = 20) {
+  return request(`/chat/sessions?limit=${limit}`);
+}
+
+/**
+ * Fetches the full message list for a specific past session.
+ *
+ * @param {string} sessionId
+ * @param {number} limit
+ * @returns {Promise<{session_id, patient_id, messages, total_messages}>}
+ */
+export async function getSessionHistory(sessionId, limit = 100) {
+  return request(`/chat/history/${sessionId}?limit=${limit}`);
+}
+
+/**
  * Clears the in-memory conversation context on the server.
  */
 export async function clearHistory() {

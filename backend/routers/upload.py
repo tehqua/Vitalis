@@ -1,18 +1,17 @@
 """
-File upload router with validation, database records, and error handling.
+File upload router — stores files in MongoDB GridFS (no local disk).
 """
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from typing import Optional
 import logging
-import os
 from datetime import datetime
 
 from ..schemas import FileUploadResponse
-from ..services.file_service import save_uploaded_file, get_file_info, validate_file_path
+from ..validators import FileValidator
 from ..config import get_settings, Settings
 from ..auth import get_current_user, TokenData
-from ..validators import FileValidator
 from ..database import get_db, Database
 
 logger = logging.getLogger(__name__)
@@ -20,252 +19,204 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# --------------------------------------------------------------------------- #
+# Helpers                                                                       #
+# --------------------------------------------------------------------------- #
+
+async def _read_and_validate(
+    file: UploadFile,
+    kind: str,          # "image" | "audio"
+    settings: Settings,
+):
+    """Validate extension + content-type, read bytes, return (bytes, size)."""
+    is_valid, error = FileValidator.validate_file_extension(file.filename, kind)
+    if not is_valid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+
+    expected_prefix = f"{kind}/"
+    if file.content_type and not file.content_type.startswith(expected_prefix):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid content type: {file.content_type}. Expected {expected_prefix}*",
+        )
+
+    content = await file.read()
+    size_bytes = len(content)
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    if size_bytes > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large ({size_bytes / 1024 / 1024:.1f} MB). Max {settings.MAX_FILE_SIZE_MB} MB.",
+        )
+    return content, size_bytes
+
+
+# --------------------------------------------------------------------------- #
+# Upload endpoints                                                              #
+# --------------------------------------------------------------------------- #
+
 @router.post("/image", response_model=FileUploadResponse)
 async def upload_image(
-    file: UploadFile = File(..., description="Image file to upload"),
+    file: UploadFile = File(..., description="Image file — stored in MongoDB GridFS"),
     current_user: TokenData = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
-    db: Database = Depends(get_db)
+    db: Database = Depends(get_db),
 ):
     """
     Upload an image file.
 
-    Accepts image files for skin condition analysis. The uploaded file
-    will be validated for type, size, and content before saving.
-    A database record is created so the file can be retrieved or deleted later.
+    Binary content is persisted in **MongoDB GridFS** (not on local disk).
+    Use `GET /upload/file/{file_id}` to retrieve the raw bytes later.
 
-    Supported formats: JPG, JPEG, PNG, GIF, WEBP
-    Maximum size: 10MB (configurable)
-
-    Args:
-        file: Image file to upload
-        current_user: Authenticated user
-        settings: Application settings
-        db: Database instance
-
-    Returns:
-        File upload response with file details and stable file_id
-
-    Raises:
-        HTTPException: If validation fails or upload error occurs
+    Supported formats: JPG, JPEG, PNG, GIF, WEBP — Max 10 MB (configurable)
     """
     logger.info(
-        f"Image upload request from patient {current_user.patient_id}: "
-        f"{file.filename} ({file.content_type})"
+        f"Image upload: patient={current_user.patient_id} "
+        f"file={file.filename} type={file.content_type}"
     )
-
     try:
-        # Validate filename
-        is_valid, error = FileValidator.validate_file_extension(
-            file.filename,
-            "image"
-        )
-        if not is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error
-            )
+        content, size_bytes = await _read_and_validate(file, "image", settings)
 
-        # Validate content type
-        if file.content_type and not file.content_type.startswith("image/"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid content type: {file.content_type}. Expected image/*"
-            )
-
-        # Save file to disk
-        file_path = await save_uploaded_file(
-            file=file,
-            upload_dir=settings.UPLOAD_DIR,
-            file_type="image",
-            allowed_extensions=settings.ALLOWED_IMAGE_EXTENSIONS,
-            max_size_mb=settings.MAX_FILE_SIZE_MB
-        )
-
-        # Get file info
-        file_info = await get_file_info(file_path)
-        size_bytes = file_info.get("size_bytes", 0)
-
-        # Save to database — generates a stable UUID file_id
         file_id = await db.save_upload(
             patient_id=current_user.patient_id,
             session_id=current_user.session_id,
             filename=file.filename,
-            file_path=file_path,
+            file_content=content,
             file_type="image",
             size_bytes=size_bytes,
+            content_type=file.content_type or "image/jpeg",
         )
 
-        logger.info(
-            f"Image uploaded successfully: {file_path} "
-            f"({file_info.get('size_mb', 0):.2f}MB) | file_id={file_id}"
-        )
+        file_url = f"/api/upload/file/{file_id}"
+        logger.info(f"Image stored in GridFS: file_id={file_id} ({size_bytes / 1024:.1f} KB)")
 
         return FileUploadResponse(
             file_id=file_id,
             filename=file.filename,
-            file_path=file_path,
+            file_path=file_url,   # reuse field to hold the serve URL
             file_type="image",
             size_bytes=size_bytes,
-            uploaded_at=datetime.utcnow().isoformat()
+            uploaded_at=datetime.utcnow().isoformat(),
         )
-
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Image upload error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload image: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to upload image: {e}")
 
 
 @router.post("/audio", response_model=FileUploadResponse)
 async def upload_audio(
-    file: UploadFile = File(..., description="Audio file to upload"),
+    file: UploadFile = File(..., description="Audio file — stored in MongoDB GridFS"),
     current_user: TokenData = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
-    db: Database = Depends(get_db)
+    db: Database = Depends(get_db),
 ):
     """
     Upload an audio file.
 
-    Accepts audio files for speech-to-text transcription. The uploaded
-    file will be validated for type, size, and content before saving.
-    A database record is created so the file can be retrieved or deleted later.
+    Binary content is persisted in **MongoDB GridFS** (not on local disk).
+    Use `GET /upload/file/{file_id}` to retrieve the raw bytes later.
 
-    Supported formats: WAV, MP3, M4A, OGG
-    Maximum size: 50MB (configurable)
-    Recommended: WAV, 16kHz, mono
-
-    Args:
-        file: Audio file to upload
-        current_user: Authenticated user
-        settings: Application settings
-        db: Database instance
-
-    Returns:
-        File upload response with file details and stable file_id
-
-    Raises:
-        HTTPException: If validation fails or upload error occurs
+    Supported formats: WAV, MP3, M4A, OGG — Max 10 MB (configurable)
     """
     logger.info(
-        f"Audio upload request from patient {current_user.patient_id}: "
-        f"{file.filename} ({file.content_type})"
+        f"Audio upload: patient={current_user.patient_id} "
+        f"file={file.filename} type={file.content_type}"
     )
-
     try:
-        # Validate filename
-        is_valid, error = FileValidator.validate_file_extension(
-            file.filename,
-            "audio"
-        )
-        if not is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error
-            )
+        content, size_bytes = await _read_and_validate(file, "audio", settings)
 
-        # Validate content type
-        if file.content_type and not file.content_type.startswith("audio/"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid content type: {file.content_type}. Expected audio/*"
-            )
-
-        # Save file to disk
-        file_path = await save_uploaded_file(
-            file=file,
-            upload_dir=settings.UPLOAD_DIR,
-            file_type="audio",
-            allowed_extensions=settings.ALLOWED_AUDIO_EXTENSIONS,
-            max_size_mb=settings.MAX_FILE_SIZE_MB
-        )
-
-        # Get file info
-        file_info = await get_file_info(file_path)
-        size_bytes = file_info.get("size_bytes", 0)
-
-        # Save to database — generates a stable UUID file_id
         file_id = await db.save_upload(
             patient_id=current_user.patient_id,
             session_id=current_user.session_id,
             filename=file.filename,
-            file_path=file_path,
+            file_content=content,
             file_type="audio",
             size_bytes=size_bytes,
+            content_type=file.content_type or "audio/wav",
         )
 
-        logger.info(
-            f"Audio uploaded successfully: {file_path} "
-            f"({file_info.get('size_mb', 0):.2f}MB) | file_id={file_id}"
-        )
+        file_url = f"/api/upload/file/{file_id}"
+        logger.info(f"Audio stored in GridFS: file_id={file_id} ({size_bytes / 1024:.1f} KB)")
 
         return FileUploadResponse(
             file_id=file_id,
             filename=file.filename,
-            file_path=file_path,
+            file_path=file_url,
             file_type="audio",
             size_bytes=size_bytes,
-            uploaded_at=datetime.utcnow().isoformat()
+            uploaded_at=datetime.utcnow().isoformat(),
         )
-
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Audio upload error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload audio: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to upload audio: {e}")
+
+
+# --------------------------------------------------------------------------- #
+# Serve / info / delete                                                         #
+# --------------------------------------------------------------------------- #
+
+@router.get("/file/{file_id}")
+async def serve_upload_file(
+    file_id: str,
+    current_user: TokenData = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
+    """
+    Stream the raw binary content of an uploaded file from GridFS.
+
+    Returns the file with its original MIME type so browsers/clients can
+    render images or play audio directly.
+    """
+    stream, doc = await db.get_upload_file_stream(file_id=file_id)
+    if not stream or not doc:
+        raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+
+    if doc.get("patient_id") != current_user.patient_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    content_type = doc.get("content_type", "application/octet-stream")
+    filename = doc.get("filename", "download")
+
+    async def _generator():
+        while chunk := await stream.readchunk():
+            yield chunk
+
+    return StreamingResponse(
+        _generator(),
+        media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @router.get("/info/{file_id}")
 async def get_upload_info(
     file_id: str,
     current_user: TokenData = Depends(get_current_user),
-    db: Database = Depends(get_db)
+    db: Database = Depends(get_db),
 ):
-    """
-    Get information about an uploaded file.
-
-    Retrieves metadata for a previously uploaded file including original
-    filename, type, size, and upload timestamp. Users can only view
-    files they uploaded themselves.
-
-    Args:
-        file_id: File UUID from upload response
-        current_user: Authenticated user
-        db: Database instance
-
-    Returns:
-        File metadata dictionary
-
-    Raises:
-        HTTPException 404: If file not found or not owned by current user
-    """
+    """Get metadata for an uploaded file (no binary content)."""
     doc = await db.get_upload(file_id=file_id)
-
     if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"File not found: {file_id}"
-        )
-
-    # Ownership check — patients can only see their own files
+        raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
     if doc.get("patient_id") != current_user.patient_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access this file"
-        )
+        raise HTTPException(status_code=403, detail="Access denied")
 
     return {
         "file_id": doc["file_id"],
         "filename": doc["filename"],
         "file_type": doc["file_type"],
+        "content_type": doc.get("content_type"),
         "size_bytes": doc["size_bytes"],
-        "uploaded_at": doc["uploaded_at"].isoformat() if isinstance(doc["uploaded_at"], datetime) else doc["uploaded_at"],
+        "uploaded_at": (
+            doc["uploaded_at"].isoformat()
+            if isinstance(doc["uploaded_at"], datetime)
+            else doc["uploaded_at"]
+        ),
+        "file_url": f"/api/upload/file/{file_id}",
         "session_id": doc.get("session_id"),
     }
 
@@ -274,83 +225,34 @@ async def get_upload_info(
 async def delete_upload(
     file_id: str,
     current_user: TokenData = Depends(get_current_user),
-    db: Database = Depends(get_db)
+    db: Database = Depends(get_db),
 ):
-    """
-    Delete an uploaded file.
-
-    Removes a previously uploaded file from both disk storage and the
-    database. Users can only delete files they uploaded themselves.
-
-    Args:
-        file_id: File UUID from upload response
-        current_user: Authenticated user
-        db: Database instance
-
-    Returns:
-        Deletion confirmation
-
-    Raises:
-        HTTPException 404: If file not found or not owned by current user
-    """
-    # Fetch record first to get the disk path and verify ownership
+    """Delete a file from GridFS and its metadata record."""
+    # Verify existence + ownership first
     doc = await db.get_upload(file_id=file_id)
-
     if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"File not found: {file_id}"
-        )
-
+        raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
     if doc.get("patient_id") != current_user.patient_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to delete this file"
-        )
+        raise HTTPException(status_code=403, detail="Access denied")
 
-    # Delete from disk
-    file_path = doc.get("file_path")
-    disk_deleted = False
-    if file_path and os.path.exists(file_path):
-        try:
-            os.remove(file_path)
-            disk_deleted = True
-            logger.info(f"Deleted file from disk: {file_path}")
-        except OSError as e:
-            logger.warning(f"Could not delete file from disk ({file_path}): {e}")
+    deleted = await db.delete_upload(file_id=file_id, patient_id=current_user.patient_id)
+    if not deleted:
+        raise HTTPException(status_code=500, detail="Delete failed unexpectedly")
 
-    # Delete DB record (ownership already verified above)
-    await db.delete_upload(file_id=file_id, patient_id=current_user.patient_id)
-
-    return {
-        "message": "File deleted successfully",
-        "file_id": file_id,
-        "disk_deleted": disk_deleted,
-    }
+    return {"message": "File deleted successfully", "file_id": file_id}
 
 
 @router.get("/my-uploads")
 async def list_my_uploads(
     file_type: Optional[str] = None,
     current_user: TokenData = Depends(get_current_user),
-    db: Database = Depends(get_db)
+    db: Database = Depends(get_db),
 ):
-    """
-    List all uploads for the current user.
-
-    Args:
-        file_type: Optional filter ('image' or 'audio')
-        current_user: Authenticated user
-        db: Database instance
-
-    Returns:
-        List of upload records (newest first)
-    """
+    """List all uploads for the current user."""
     docs = await db.get_patient_uploads(
         patient_id=current_user.patient_id,
         file_type=file_type,
     )
-
     return {
         "patient_id": current_user.patient_id,
         "total": len(docs),
@@ -360,7 +262,12 @@ async def list_my_uploads(
                 "filename": d["filename"],
                 "file_type": d["file_type"],
                 "size_bytes": d["size_bytes"],
-                "uploaded_at": d["uploaded_at"].isoformat() if isinstance(d["uploaded_at"], datetime) else d["uploaded_at"],
+                "file_url": f"/api/upload/file/{d['file_id']}",
+                "uploaded_at": (
+                    d["uploaded_at"].isoformat()
+                    if isinstance(d["uploaded_at"], datetime)
+                    else d["uploaded_at"]
+                ),
             }
             for d in docs
         ],
@@ -368,35 +275,20 @@ async def list_my_uploads(
 
 
 @router.get("/limits")
-async def get_upload_limits(
-    settings: Settings = Depends(get_settings)
-):
-    """
-    Get upload size limits and allowed formats.
-
-    Returns configuration for file uploads including maximum sizes
-    and allowed extensions for each file type.
-
-    Args:
-        settings: Application settings
-
-    Returns:
-        Upload limits and allowed formats
-    """
+async def get_upload_limits(settings: Settings = Depends(get_settings)):
+    """Get upload size limits and allowed file formats."""
     return {
         "image": {
             "max_size_mb": settings.MAX_FILE_SIZE_MB,
             "allowed_extensions": settings.ALLOWED_IMAGE_EXTENSIONS,
-            "mime_types": ["image/jpeg", "image/png", "image/gif", "image/webp"]
+            "mime_types": ["image/jpeg", "image/png", "image/gif", "image/webp"],
+            "storage": "MongoDB GridFS",
         },
         "audio": {
             "max_size_mb": settings.MAX_FILE_SIZE_MB,
             "allowed_extensions": settings.ALLOWED_AUDIO_EXTENSIONS,
             "mime_types": ["audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg"],
-            "recommendations": {
-                "format": "WAV",
-                "sample_rate": "16kHz",
-                "channels": "mono"
-            }
-        }
+            "storage": "MongoDB GridFS",
+            "recommendations": {"format": "WAV", "sample_rate": "16kHz", "channels": "mono"},
+        },
     }

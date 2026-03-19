@@ -308,3 +308,83 @@ async def clear_conversation_history(
     await orchestrator.clear_memory(current_user.session_id)
     
     return {"message": "Conversation history cleared"}
+
+
+@router.get("/sessions")
+async def get_patient_sessions(
+    limit: int = 20,
+    current_user: TokenData = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """
+    Get a list of all chat sessions for the current patient.
+
+    Returns sessions sorted newest-first. Each item has:
+    - session_id, first_message (title), started_at, last_activity, message_count
+
+    Used by the Sidebar to render the per-session Recent History list.
+    """
+    sessions = await db.get_patient_sessions(
+        patient_id=current_user.patient_id,
+        limit=limit
+    )
+
+    result = []
+    for s in sessions:
+        result.append({
+            "session_id":    s["session_id"],
+            "first_message": s.get("first_message", ""),
+            "started_at":    s["started_at"].isoformat() if s.get("started_at") else None,
+            "last_activity": s["last_activity"].isoformat() if s.get("last_activity") else None,
+            "message_count": s.get("message_count", 0),
+        })
+
+    return {"patient_id": current_user.patient_id, "sessions": result, "total": len(result)}
+
+
+@router.get("/history/{session_id}", response_model=ConversationHistoryResponse)
+async def get_session_history(
+    session_id: str,
+    limit: int = 100,
+    current_user: TokenData = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """
+    Get full conversation history for a specific session.
+
+    Ownership is verified — patients can only retrieve their own sessions.
+    Used when the user clicks a session item in the Sidebar.
+    """
+    conversations = await db.get_conversation_history(
+        session_id=session_id,
+        limit=limit
+    )
+
+    for conv in conversations:
+        if conv.get("patient_id") != current_user.patient_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied to this session"
+            )
+
+    messages = []
+    for conv in conversations:
+        messages.append(ConversationMessage(
+            role="user",
+            content=conv["message"],
+            timestamp=conv["created_at"],
+            metadata=None
+        ))
+        messages.append(ConversationMessage(
+            role="assistant",
+            content=conv["response"],
+            timestamp=conv["created_at"],
+            metadata=conv.get("metadata")
+        ))
+
+    return ConversationHistoryResponse(
+        session_id=session_id,
+        patient_id=current_user.patient_id,
+        messages=messages,
+        total_messages=len(messages)
+    )

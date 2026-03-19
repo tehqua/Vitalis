@@ -1,12 +1,13 @@
 """
 Database connection and operations.
 
-Supports MongoDB for conversation storage and session management.
+Supports MongoDB for conversation storage, session management,
+and GridFS for binary file (image/audio) storage.
 """
 
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
 from pymongo.errors import ConnectionFailure
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, AsyncGenerator
 from datetime import datetime, timedelta
 import uuid
 import logging
@@ -20,6 +21,7 @@ class Database:
     def __init__(self):
         self.client: Optional[AsyncIOMotorClient] = None
         self.db = None
+        self.fs: Optional[AsyncIOMotorGridFSBucket] = None  # GridFS for binary file storage
         
     async def connect(self, database_url: str, database_name: str):
         """
@@ -32,6 +34,9 @@ class Database:
         try:
             self.client = AsyncIOMotorClient(database_url)
             self.db = self.client[database_name]
+            
+            # GridFS bucket for binary file storage (images, audio)
+            self.fs = AsyncIOMotorGridFSBucket(self.db, bucket_name="uploads_fs")
             
             # Test connection
             await self.client.admin.command('ping')
@@ -243,51 +248,95 @@ class Database:
         patient_id: str,
         session_id: str,
         filename: str,
-        file_path: str,
+        file_content: bytes,
         file_type: str,
         size_bytes: int,
+        content_type: str = "application/octet-stream",
     ) -> str:
         """
-        Save an uploaded file record.
+        Save an uploaded file to GridFS and record its metadata.
+        
+        The binary content is stored in MongoDB GridFS (uploads_fs.files /
+        uploads_fs.chunks) and a lightweight metadata document is inserted
+        into the `uploads` collection for fast lookup.
         
         Args:
             patient_id: Owner patient identifier
             session_id: Session during which the file was uploaded
             filename: Original filename
-            file_path: Path on disk where the file is stored
+            file_content: Raw file bytes
             file_type: 'image' or 'audio'
             size_bytes: File size in bytes
+            content_type: MIME type
             
         Returns:
-            Stable UUID file_id for the upload
+            Stable UUID file_id that maps to the GridFS entry
         """
         file_id = str(uuid.uuid4())
+        
+        # Write binary content to GridFS
+        gridfs_id = await self.fs.upload_from_stream(
+            filename,
+            file_content,
+            metadata={
+                "file_id": file_id,
+                "patient_id": patient_id,
+                "file_type": file_type,
+                "content_type": content_type,
+            }
+        )
+        
+        # Save lightweight metadata document for fast query
         upload_doc = {
             "file_id": file_id,
+            "gridfs_id": gridfs_id,          # ObjectId of the GridFS file
             "patient_id": patient_id,
             "session_id": session_id,
             "filename": filename,
-            "file_path": file_path,
             "file_type": file_type,
+            "content_type": content_type,
             "size_bytes": size_bytes,
             "uploaded_at": datetime.utcnow(),
         }
         await self.db.uploads.insert_one(upload_doc)
-        logger.info(f"Upload record saved: {file_id} ({file_type}) for patient {patient_id}")
+        logger.info(
+            f"Upload saved to GridFS: file_id={file_id} "
+            f"gridfs_id={gridfs_id} ({file_type}) patient={patient_id}"
+        )
         return file_id
+    
+    async def get_upload_file_stream(self, file_id: str):
+        """
+        Open a GridFS download stream for the given file_id.
+        
+        Returns a (stream, metadata_doc) tuple. The caller is responsible
+        for reading and closing the stream. Returns (None, None) if not found.
+        
+        Args:
+            file_id: UUID file identifier
+            
+        Returns:
+            Tuple[GridOut stream | None, metadata dict | None]
+        """
+        doc = await self.db.uploads.find_one({"file_id": file_id})
+        if not doc:
+            return None, None
+        
+        stream = await self.fs.open_download_stream(doc["gridfs_id"])
+        return stream, doc
     
     async def get_upload(
         self,
         file_id: str,
     ) -> Optional[Dict[str, Any]]:
         """
-        Get upload record by file_id.
+        Get upload metadata by file_id (does not return binary content).
         
         Args:
             file_id: File UUID identifier
             
         Returns:
-            Upload document or None if not found
+            Upload metadata document or None if not found
         """
         doc = await self.db.uploads.find_one({"file_id": file_id})
         return doc
@@ -299,7 +348,7 @@ class Database:
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """
-        Get all upload records for a patient.
+        Get all upload metadata records for a patient.
         
         Args:
             patient_id: Patient identifier
@@ -307,7 +356,7 @@ class Database:
             limit: Maximum number of records to return
             
         Returns:
-            List of upload documents (newest first)
+            List of upload metadata documents (newest first)
         """
         query: Dict[str, Any] = {"patient_id": patient_id}
         if file_type:
@@ -321,7 +370,8 @@ class Database:
         patient_id: str,
     ) -> bool:
         """
-        Delete an upload record (ownership check included).
+        Delete a file from GridFS and its metadata record.
+        Ownership is verified via patient_id.
         
         Args:
             file_id: File UUID identifier
@@ -330,17 +380,78 @@ class Database:
         Returns:
             True if deleted, False if not found or not owned by patient
         """
-        result = await self.db.uploads.delete_one(
+        doc = await self.db.uploads.find_one(
             {"file_id": file_id, "patient_id": patient_id}
         )
-        deleted = result.deleted_count > 0
-        if deleted:
-            logger.info(f"Upload record deleted: {file_id}")
-        else:
+        if not doc:
             logger.warning(
                 f"Delete failed for file_id={file_id}: not found or not owned by {patient_id}"
             )
-        return deleted
+            return False
+        
+        # Delete binary from GridFS
+        gridfs_id = doc.get("gridfs_id")
+        if gridfs_id:
+            try:
+                await self.fs.delete(gridfs_id)
+            except Exception as e:
+                logger.warning(f"GridFS delete error for {gridfs_id}: {e}")
+        
+        # Delete metadata document
+        await self.db.uploads.delete_one({"file_id": file_id})
+        logger.info(f"Upload deleted: file_id={file_id} gridfs_id={gridfs_id}")
+        return True
+    
+    # ------------------------------------------------------------------ #
+    # Session-based history                                                #
+    # ------------------------------------------------------------------ #
+    
+    async def get_patient_sessions(
+        self,
+        patient_id: str,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return a summary list of chat sessions for a patient.
+        
+        Each item contains: session_id, first_message (as title),
+        started_at, last_activity, message_count.
+        Sessions are sorted newest first.
+        
+        Args:
+            patient_id: Patient identifier
+            limit: Maximum number of sessions to return
+            
+        Returns:
+            List of session summary dicts
+        """
+        pipeline = [
+            {"$match": {"patient_id": patient_id}},
+            {"$sort": {"created_at": 1}},
+            {
+                "$group": {
+                    "_id": "$session_id",
+                    "first_message": {"$first": "$message"},
+                    "started_at":    {"$first": "$created_at"},
+                    "last_activity": {"$last": "$created_at"},
+                    "message_count": {"$sum": 1},
+                }
+            },
+            {"$sort": {"last_activity": -1}},
+            {"$limit": limit},
+            {
+                "$project": {
+                    "_id": 0,
+                    "session_id":    "$_id",
+                    "first_message": 1,
+                    "started_at":    1,
+                    "last_activity": 1,
+                    "message_count": 1,
+                }
+            },
+        ]
+        sessions = await self.db.conversations.aggregate(pipeline).to_list(length=limit)
+        return sessions
 
 
 # Global database instance
