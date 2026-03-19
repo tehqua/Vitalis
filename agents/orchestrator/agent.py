@@ -71,8 +71,8 @@ class MedicalChatbotAgent:
         # Build the state graph
         self.graph = self._build_graph()
         
-        # Conversation memory (optional - can be managed externally)
-        self.memory = ConversationMemory(max_messages=self.config.max_conversation_length)
+        # NOTE: Conversation memory is now managed externally (per-session) by OrchestratorService.
+        # The agent itself is stateless regarding conversation history.
         
         logger.info("MedicalChatbotAgent initialized successfully")
     
@@ -219,6 +219,7 @@ class MedicalChatbotAgent:
         audio_file_path: Optional[str] = None,
         image_file_path: Optional[str] = None,
         session_id: Optional[str] = None,
+        conversation_history: Optional[list] = None,
     ) -> Dict[str, Any]:
         """
         Process a user message through the agent workflow.
@@ -229,6 +230,8 @@ class MedicalChatbotAgent:
             audio_file_path: Path to audio file (if speech input)
             image_file_path: Path to image file (if image input)
             session_id: Session identifier (generated if not provided)
+            conversation_history: Prior messages for this session (per-user memory,
+                                  provided by OrchestratorService from MongoDB + in-memory store)
             
         Returns:
             Dict containing response and metadata
@@ -240,7 +243,7 @@ class MedicalChatbotAgent:
         # Initialize state
         initial_state: AgentState = {
             "patient_id": patient_id,
-            "messages": self.memory.get_messages(),
+            "messages": conversation_history or [],
             "current_input_type": "text",
             "user_text_input": text_input,
             "audio_file_path": audio_file_path,
@@ -274,19 +277,16 @@ class MedicalChatbotAgent:
             # Extract response
             response_text = final_state.get("final_response", "")
             
-            # Add to memory
-            if text_input:
-                self.memory.add_message("user", text_input)
-            elif final_state.get("transcribed_text"):
-                self.memory.add_message("user", final_state["transcribed_text"])
+            # Determine the user text that was actually used (typed or transcribed)
+            effective_user_text = text_input or final_state.get("transcribed_text", "")
             
-            self.memory.add_message("assistant", response_text)
-            
-            # Prepare result
+            # Prepare result — include effective_user_text so OrchestratorService
+            # can update the per-session ConversationMemory correctly
             result = {
                 "response": response_text,
                 "session_id": session_id,
                 "timestamp": final_state.get("timestamp"),
+                "effective_user_text": effective_user_text,
                 "metadata": {
                     "input_type": final_state.get("current_input_type"),
                     "tools_used": final_state.get("tool_calls_completed", []),
@@ -315,13 +315,18 @@ class MedicalChatbotAgent:
             }
     
     def clear_memory(self):
-        """Clear conversation memory"""
-        self.memory.clear()
-        logger.info("Conversation memory cleared")
+        """
+        No-op: per-session memory is now managed by OrchestratorService.
+        Kept for backwards compatibility.
+        """
+        logger.info("clear_memory() called on agent — memory is managed externally per-session")
     
     def get_conversation_history(self):
-        """Get conversation history"""
-        return self.memory.get_messages()
+        """
+        Returns empty list: per-session history is now managed by OrchestratorService.
+        Kept for backwards compatibility.
+        """
+        return []
     
     def export_graph_diagram(self, output_path: str = "workflow_graph.png"):
         """

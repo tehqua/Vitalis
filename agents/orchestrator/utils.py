@@ -237,7 +237,7 @@ def parse_tool_output(output: str) -> Dict[str, Any]:
 
 
 class ConversationMemory:
-    """Simple conversation memory manager"""
+    """Simple conversation memory manager (per-session)"""
     
     def __init__(self, max_messages: int = 50):
         """
@@ -248,6 +248,34 @@ class ConversationMemory:
         """
         self.max_messages = max_messages
         self.messages: List[Message] = []
+    
+    def seed_from_db(self, db_records: List[Dict[str, Any]]):
+        """
+        Seed memory from MongoDB conversation records.
+        
+        Each record contains 'message' (user) and 'response' (assistant).
+        Records are expected to be in chronological order.
+        
+        Args:
+            db_records: List of conversation documents from MongoDB
+        """
+        self.messages = []
+        for record in db_records:
+            user_msg = record.get("message", "")
+            bot_msg = record.get("response", "")
+            if user_msg:
+                self.messages.append(create_message("user", user_msg))
+            if bot_msg:
+                self.messages.append(create_message("assistant", bot_msg))
+        
+        # Truncate to max if DB has very long history
+        if len(self.messages) > self.max_messages:
+            system_msgs = [m for m in self.messages if m.get("role") == "system"]
+            other_msgs = [m for m in self.messages if m.get("role") != "system"]
+            keep_count = self.max_messages - len(system_msgs)
+            self.messages = system_msgs + other_msgs[-keep_count:]
+        
+        logger.info(f"ConversationMemory seeded with {len(self.messages)} messages from DB")
     
     def add_message(self, role: str, content: str, metadata: Dict[str, Any] = None):
         """Add a message to memory"""

@@ -8,6 +8,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ConnectionFailure
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
+import uuid
 import logging
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,12 @@ class Database:
         await self.db.sessions.create_index("session_id", unique=True)
         await self.db.sessions.create_index("patient_id")
         await self.db.sessions.create_index("expires_at")
+        
+        # Uploads collection
+        await self.db.uploads.create_index("file_id", unique=True)
+        await self.db.uploads.create_index("patient_id")
+        await self.db.uploads.create_index("session_id")
+        await self.db.uploads.create_index("uploaded_at")
         
         logger.info("Database indexes created")
     
@@ -226,6 +233,114 @@ class Database:
             {"expires_at": {"$lt": datetime.utcnow()}}
         )
         logger.info(f"Cleaned up {result.deleted_count} expired sessions")
+    
+    # ------------------------------------------------------------------ #
+    # Upload operations                                                    #
+    # ------------------------------------------------------------------ #
+    
+    async def save_upload(
+        self,
+        patient_id: str,
+        session_id: str,
+        filename: str,
+        file_path: str,
+        file_type: str,
+        size_bytes: int,
+    ) -> str:
+        """
+        Save an uploaded file record.
+        
+        Args:
+            patient_id: Owner patient identifier
+            session_id: Session during which the file was uploaded
+            filename: Original filename
+            file_path: Path on disk where the file is stored
+            file_type: 'image' or 'audio'
+            size_bytes: File size in bytes
+            
+        Returns:
+            Stable UUID file_id for the upload
+        """
+        file_id = str(uuid.uuid4())
+        upload_doc = {
+            "file_id": file_id,
+            "patient_id": patient_id,
+            "session_id": session_id,
+            "filename": filename,
+            "file_path": file_path,
+            "file_type": file_type,
+            "size_bytes": size_bytes,
+            "uploaded_at": datetime.utcnow(),
+        }
+        await self.db.uploads.insert_one(upload_doc)
+        logger.info(f"Upload record saved: {file_id} ({file_type}) for patient {patient_id}")
+        return file_id
+    
+    async def get_upload(
+        self,
+        file_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get upload record by file_id.
+        
+        Args:
+            file_id: File UUID identifier
+            
+        Returns:
+            Upload document or None if not found
+        """
+        doc = await self.db.uploads.find_one({"file_id": file_id})
+        return doc
+    
+    async def get_patient_uploads(
+        self,
+        patient_id: str,
+        file_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all upload records for a patient.
+        
+        Args:
+            patient_id: Patient identifier
+            file_type: Optional filter ('image' or 'audio')
+            limit: Maximum number of records to return
+            
+        Returns:
+            List of upload documents (newest first)
+        """
+        query: Dict[str, Any] = {"patient_id": patient_id}
+        if file_type:
+            query["file_type"] = file_type
+        cursor = self.db.uploads.find(query).sort("uploaded_at", -1).limit(limit)
+        return await cursor.to_list(length=limit)
+    
+    async def delete_upload(
+        self,
+        file_id: str,
+        patient_id: str,
+    ) -> bool:
+        """
+        Delete an upload record (ownership check included).
+        
+        Args:
+            file_id: File UUID identifier
+            patient_id: Patient making the request (must own the file)
+            
+        Returns:
+            True if deleted, False if not found or not owned by patient
+        """
+        result = await self.db.uploads.delete_one(
+            {"file_id": file_id, "patient_id": patient_id}
+        )
+        deleted = result.deleted_count > 0
+        if deleted:
+            logger.info(f"Upload record deleted: {file_id}")
+        else:
+            logger.warning(
+                f"Delete failed for file_id={file_id}: not found or not owned by {patient_id}"
+            )
+        return deleted
 
 
 # Global database instance

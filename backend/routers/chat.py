@@ -59,7 +59,8 @@ async def send_message(
         result = await orchestrator.process_message(
             patient_id=current_user.patient_id,
             text_input=request.message,
-            session_id=current_user.session_id
+            session_id=current_user.session_id,
+            db=db
         )
         
         # Save to database
@@ -132,7 +133,8 @@ async def send_message_with_image(
             patient_id=current_user.patient_id,
             text_input=message,
             image_file_path=image_path,
-            session_id=current_user.session_id
+            session_id=current_user.session_id,
+            db=db
         )
         
         # Save to database
@@ -206,7 +208,8 @@ async def send_message_with_audio(
         result = await orchestrator.process_message(
             patient_id=current_user.patient_id,
             audio_file_path=audio_path,
-            session_id=current_user.session_id
+            session_id=current_user.session_id,
+            db=db
         )
         
         # Save to database
