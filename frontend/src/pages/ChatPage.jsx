@@ -10,8 +10,9 @@ import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import MessageBubble from "../components/MessageBubble";
 import ChatInput from "../components/ChatInput";
+import PatientRecordPanel from "../components/PatientRecordPanel";
 import { useChat } from "../hooks/useChat";
-import { getSessions, getSessionHistory } from "../services/api";
+import { getSessions, getSessionHistory, getPatientRecord } from "../services/api";
 
 const s = {
   root: {
@@ -149,9 +150,16 @@ export default function ChatPage({ patientId, onLogout }) {
     useChat();
   const feedRef = useRef(null);
 
-  // History to show in Sidebar
+  // Sidebar history
   const [historyItems, setHistoryItems] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  // ----- Patient record panel state -----
+  // view: "chat" | "record"
+  const [view, setView] = useState("chat");
+  const [recordData, setRecordData] = useState(null);    // cached API response
+  const [recordLoading, setRecordLoading] = useState(false);
+  const [recordError, setRecordError] = useState(null);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -220,10 +228,35 @@ export default function ChatPage({ patientId, onLogout }) {
 
   function handleNewConsult() {
     clearMessages();
+    setView("chat");   // return to chat when starting a new consult
   }
 
+  /**
+   * Triggered when user clicks "Personal Records" in the Sidebar.
+   * Fetches the FHIR-based report on first click; subsequent clicks use the cache.
+   */
+  const handleViewRecord = useCallback(async () => {
+    setView("record");
+    if (recordData) return;          // already loaded — use cached data
+    setRecordLoading(true);
+    setRecordError(null);
+    try {
+      const data = await getPatientRecord();
+      setRecordData(data);
+    } catch (err) {
+      setRecordError(err.message || "Failed to load medical record.");
+    } finally {
+      setRecordLoading(false);
+    }
+  }, [recordData]);
+
+  /** Return from the record panel back to the chat feed. */
+  const handleCloseRecord = useCallback(() => {
+    setView("chat");
+  }, []);
+
   const firstName = getFirstName(patientId) || "there";
-  const showWelcome = messages.length === 0;
+  const showWelcome = messages.length === 0 && view === "chat";
 
   return (
     <div style={s.root}>
@@ -232,6 +265,7 @@ export default function ChatPage({ patientId, onLogout }) {
         onLogout={onLogout}
         onViewHistory={handleViewHistory}
         onSelectSession={handleSelectSession}
+        onViewRecord={handleViewRecord}
         historyItems={historyItems}
         historyLoading={historyLoading}
       />
@@ -239,59 +273,71 @@ export default function ChatPage({ patientId, onLogout }) {
       <main style={s.main}>
         <TopBar patientId={patientId} />
 
-        <div style={s.feed} ref={feedRef}>
-          {showWelcome && (
-            <div style={s.welcome}>
-              <div style={s.welcomeIcon}>
-                <span
-                  className="material-symbols-outlined"
-                  style={{ fontSize: "1.75rem", color: "#0d9488" }}
-                >
-                  health_and_safety
-                </span>
-              </div>
-              <h1 style={s.welcomeTitle}>
-                {getGreeting()}, {firstName}.
-              </h1>
-              <p style={s.welcomeSub}>
-                How can MedScreening assist you with your health today?
-              </p>
+        {/* Patient Record Panel — replaces feed when active */}
+        {view === "record" ? (
+          <PatientRecordPanel
+            data={recordData}
+            loading={recordLoading}
+            error={recordError}
+            onClose={handleCloseRecord}
+          />
+        ) : (
+          <>
+            <div style={s.feed} ref={feedRef}>
+              {showWelcome && (
+                <div style={s.welcome}>
+                  <div style={s.welcomeIcon}>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.75rem", color: "#0d9488" }}
+                    >
+                      health_and_safety
+                    </span>
+                  </div>
+                  <h1 style={s.welcomeTitle}>
+                    {getGreeting()}, {firstName}.
+                  </h1>
+                  <p style={s.welcomeSub}>
+                    How can MedScreening assist you with your health today?
+                  </p>
 
-              <div style={s.quickRow}>
-                {QUICK_PROMPTS.map((prompt) => (
-                  <button
-                    key={prompt}
-                    style={s.quickBtn}
-                    onClick={() => sendText(prompt)}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "rgba(204,251,241,0.45)";
-                      e.currentTarget.style.color = "#0f766e";
-                      e.currentTarget.style.borderColor = "rgba(20,184,166,0.35)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "rgba(255,255,255,0.7)";
-                      e.currentTarget.style.color = "#475569";
-                      e.currentTarget.style.borderColor = "rgba(226,232,240,0.8)";
-                    }}
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
+                  <div style={s.quickRow}>
+                    {QUICK_PROMPTS.map((prompt) => (
+                      <button
+                        key={prompt}
+                        style={s.quickBtn}
+                        onClick={() => sendText(prompt)}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "rgba(204,251,241,0.45)";
+                          e.currentTarget.style.color = "#0f766e";
+                          e.currentTarget.style.borderColor = "rgba(20,184,166,0.35)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "rgba(255,255,255,0.7)";
+                          e.currentTarget.style.color = "#475569";
+                          e.currentTarget.style.borderColor = "rgba(226,232,240,0.8)";
+                        }}
+                      >
+                        {prompt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {messages.map((msg) => (
+                <MessageBubble key={msg.id} message={msg} />
+              ))}
             </div>
-          )}
 
-          {messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
-          ))}
-        </div>
-
-        <ChatInput
-          onSendText={sendText}
-          onSendImage={sendImage}
-          onSendAudio={sendAudio}
-          disabled={loading}
-        />
+            <ChatInput
+              onSendText={sendText}
+              onSendImage={sendImage}
+              onSendAudio={sendAudio}
+              disabled={loading}
+            />
+          </>
+        )}
       </main>
     </div>
   );

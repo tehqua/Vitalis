@@ -145,6 +145,7 @@ export default function Sidebar({
   onLogout,
   onViewHistory,
   onSelectSession,
+  onViewRecord,          // callback: open PatientRecordPanel
   historyItems = [],
   historyLoading = false,
 }) {
@@ -215,8 +216,8 @@ export default function Sidebar({
         {/* Shortcuts */}
         <div style={s.sectionLabel}>Shortcuts</div>
 
-        {/* Personal Records — không có action đặc biệt */}
-        {navItem("personal", "assignment_ind", "Personal Records")}
+        {/* Personal Records — opens PatientRecordPanel */}
+        {navItem("personal", "assignment_ind", "Personal Records", onViewRecord)}
 
         {/* Previous Consults — load history vào feed */}
         {navItem("consults", "history", "Previous Consults", onViewHistory)}

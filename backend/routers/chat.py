@@ -16,11 +16,13 @@ from ..schemas import (
     ChatWithImageRequest,
     ChatWithAudioRequest,
     ConversationHistoryResponse,
-    ConversationMessage
+    ConversationMessage,
+    PatientRecordResponse
 )
 from ..auth import get_current_user, TokenData
 from ..services.orchestrator_service import get_orchestrator_service, OrchestratorService
 from ..services.file_service import save_uploaded_file
+from ..services.patient_record_service import generate_patient_record
 
 logger = logging.getLogger(__name__)
 
@@ -388,3 +390,51 @@ async def get_session_history(
         messages=messages,
         total_messages=len(messages)
     )
+
+
+@router.get("/patient-record", response_model=PatientRecordResponse)
+async def get_patient_record(
+    current_user: TokenData = Depends(get_current_user),
+):
+    """
+    Parse the patient's FHIR bundle and return a full structured medical record report.
+
+    The report is built directly from the FHIR JSON file — no LLM or RAG retrieval involved.
+    Results are returned immediately; the heavy lifting is pure Python parsing.
+
+    Triggered when the user clicks "Personal Records" in the Sidebar.
+    """
+    from datetime import datetime as _dt
+
+    logger.info(f"Patient record requested for: {current_user.patient_id}")
+
+    try:
+        result = generate_patient_record(current_user.patient_id)
+        return PatientRecordResponse(
+            patient_id=current_user.patient_id,
+            patient_name=result["patient_name"],
+            report_text=result["report_text"],
+            sections=result["sections"],
+            generated_at=_dt.utcnow().isoformat() + "Z",
+        )
+
+    except FileNotFoundError as exc:
+        logger.warning(f"FHIR record not found: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No medical record found for this patient.",
+        )
+
+    except ValueError as exc:
+        logger.error(f"FHIR parse error for {current_user.patient_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse medical record: {exc}",
+        )
+
+    except Exception as exc:
+        logger.error(f"Unexpected error generating patient record: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while loading the patient record.",
+        )

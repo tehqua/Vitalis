@@ -158,3 +158,21 @@ class PatientStatistics(BaseModel):
     emergency_detections: int
     first_interaction: Optional[datetime]
     last_interaction: Optional[datetime]
+
+
+# Patient record report schemas
+
+class PatientRecordResponse(BaseModel):
+    """
+    Response returned by GET /api/chat/patient-record.
+    Contains a full structured medical record report parsed from the
+    patient's FHIR bundle — no LLM involved.
+    """
+    patient_id: str = Field(..., description="Patient identifier")
+    patient_name: str = Field(..., description="Full name extracted from FHIR bundle")
+    report_text: str = Field(..., description="Full formatted report as plain text")
+    sections: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Individual report sections keyed by section ID"
+    )
+    generated_at: str = Field(..., description="Report generation timestamp")

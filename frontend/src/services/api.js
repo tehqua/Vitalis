@@ -188,6 +188,16 @@ export async function clearHistory() {
   return request("/chat/history", { method: "DELETE" });
 }
 
+/**
+ * Fetches the full structured patient medical record report.
+ * Parsed directly from the patient's FHIR bundle — no LLM involved.
+ *
+ * @returns {Promise<{patient_id, patient_name, report_text, sections, generated_at}>}
+ */
+export async function getPatientRecord() {
+  return request("/chat/patient-record");
+}
+
 // ---------- health ----------
 
 /**
