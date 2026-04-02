@@ -55,6 +55,46 @@ def test_upload_limits():
     print(f"   Audio max: {data['audio']['max_size_mb']}MB")
     print()
 
+
+def test_delete_session_history(token):
+    print("6. Testing delete session history...")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Get current sessions list
+    r = requests.get(f"{BASE_URL}/chat/sessions", headers=headers)
+    assert r.status_code == 200, f"sessions list failed: {r.status_code}"
+    sessions = r.json().get("sessions", [])
+    if not sessions:
+        print("   SKIP: no sessions exist yet (send a message first)")
+        return
+
+    session_id = sessions[0]["session_id"]
+    print(f"   Deleting session: {session_id[:24]}...")
+
+    # 2. Delete the session
+    r = requests.delete(f"{BASE_URL}/chat/history/{session_id}", headers=headers)
+    print(f"   Status: {r.status_code}")
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    data = r.json()
+    print(f"   Deleted count: {data.get('deleted_count')}")
+    assert data.get("deleted_count", 0) > 0, "deleted_count should be > 0"
+
+    # 3. Confirm session no longer in list
+    r2 = requests.get(f"{BASE_URL}/chat/sessions", headers=headers)
+    remaining_ids = [s["session_id"] for s in r2.json().get("sessions", [])]
+    assert session_id not in remaining_ids, "Session still present after deletion!"
+    print("   Session deleted successfully.\n")
+
+
+def test_delete_nonexistent_session(token):
+    print("7. Testing delete non-existent session (expect 404)...")
+    headers = {"Authorization": f"Bearer {token}"}
+    fake_id = "00000000-0000-0000-0000-000000000000"
+    r = requests.delete(f"{BASE_URL}/chat/history/{fake_id}", headers=headers)
+    print(f"   Status: {r.status_code}")
+    assert r.status_code == 404, f"Expected 404, got {r.status_code}"
+    print("   Correctly returned 404.\n")
+
 if __name__ == "__main__":
     print("Starting Backend Tests...\n")
     print("=" * 60)
@@ -65,6 +105,8 @@ if __name__ == "__main__":
         test_chat(token)
         test_history(token)
         test_upload_limits()
+        test_delete_session_history(token)
+        test_delete_nonexistent_session(token)
         
         print("=" * 60)
         print("\nAll tests PASSED!")

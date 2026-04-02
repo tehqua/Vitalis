@@ -182,10 +182,20 @@ export async function getSessionHistory(sessionId, limit = 100) {
 }
 
 /**
- * Clears the in-memory conversation context on the server.
+ * Clears the in-memory conversation context on the server (current session).
  */
 export async function clearHistory() {
   return request("/chat/history", { method: "DELETE" });
+}
+
+/**
+ * Deletes all messages for a specific past session from the database.
+ *
+ * @param {string} sessionId
+ * @returns {Promise<{message, session_id, deleted_count}>}
+ */
+export async function deleteSessionHistory(sessionId) {
+  return request(`/chat/history/${sessionId}`, { method: "DELETE" });
 }
 
 /**

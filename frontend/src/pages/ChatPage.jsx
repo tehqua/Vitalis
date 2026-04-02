@@ -12,7 +12,7 @@ import MessageBubble from "../components/MessageBubble";
 import ChatInput from "../components/ChatInput";
 import PatientRecordPanel from "../components/PatientRecordPanel";
 import { useChat } from "../hooks/useChat";
-import { getSessions, getSessionHistory, getPatientRecord } from "../services/api";
+import { getSessions, getSessionHistory, getPatientRecord, deleteSessionHistory } from "../services/api";
 
 const s = {
   root: {
@@ -226,6 +226,21 @@ export default function ChatPage({ patientId, onLogout }) {
     await fetchHistory();
   }, []);
 
+  /**
+   * When user clicks the trash icon on a session item:
+   * Calls the API to delete that session from DB, then refreshes the sidebar.
+   * If the deleted session's messages are currently shown in the feed, clear them.
+   */
+  const handleDeleteSession = useCallback(async (sessionId) => {
+    try {
+      await deleteSessionHistory(sessionId);
+      await fetchHistory();
+    } catch (err) {
+      console.error("Failed to delete session:", err.message);
+      alert(`Không thể xóa cuộc trò chuyện: ${err.message}`);
+    }
+  }, []);
+
   function handleNewConsult() {
     clearMessages();
     setView("chat");   // return to chat when starting a new consult
@@ -266,6 +281,7 @@ export default function ChatPage({ patientId, onLogout }) {
         onViewHistory={handleViewHistory}
         onSelectSession={handleSelectSession}
         onViewRecord={handleViewRecord}
+        onDeleteSession={handleDeleteSession}
         historyItems={historyItems}
         historyLoading={historyLoading}
       />

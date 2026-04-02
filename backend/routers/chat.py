@@ -292,24 +292,69 @@ async def get_conversation_history(
 @router.delete("/history")
 async def clear_conversation_history(
     current_user: TokenData = Depends(get_current_user),
-    orchestrator: OrchestratorService = Depends(get_orchestrator_service)
+    orchestrator: OrchestratorService = Depends(get_orchestrator_service),
+    db: Database = Depends(get_db)
 ):
     """
-    Clear conversation history for current session.
-    
-    Note: This only clears the in-memory conversation context,
-    not the database records.
-    
+    Clear conversation history for current session (memory + database).
+
+    Deletes all conversation documents for the current session from MongoDB
+    and clears the in-memory LangGraph context.
+
     Args:
         current_user: Authenticated user data
         orchestrator: Orchestrator service
-        
+        db: Database instance
+
     Returns:
-        Confirmation message
+        Confirmation message with count of deleted records
     """
     await orchestrator.clear_memory(current_user.session_id)
-    
-    return {"message": "Conversation history cleared"}
+    deleted = await db.delete_session_conversations(
+        session_id=current_user.session_id,
+        patient_id=current_user.patient_id,
+    )
+    return {"message": "Conversation history cleared", "deleted_count": deleted}
+
+
+@router.delete("/history/{session_id}")
+async def delete_session_history(
+    session_id: str,
+    current_user: TokenData = Depends(get_current_user),
+    orchestrator: OrchestratorService = Depends(get_orchestrator_service),
+    db: Database = Depends(get_db)
+):
+    """
+    Delete all conversation records for a specific past session.
+
+    Ownership is enforced: the patient can only delete their own sessions.
+    Returns 404 if the session doesn't exist or belongs to another patient.
+
+    Args:
+        session_id: Target session identifier
+        current_user: Authenticated user data
+        orchestrator: Orchestrator service
+        db: Database instance
+
+    Returns:
+        Confirmation message with session_id and deleted_count
+    """
+    deleted = await db.delete_session_conversations(
+        session_id=session_id,
+        patient_id=current_user.patient_id,
+    )
+    if deleted == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found or access denied",
+        )
+    # Clear in-memory context in case the session was still loaded
+    await orchestrator.clear_memory(session_id)
+    logger.info(
+        f"Session {session_id} deleted by patient {current_user.patient_id} "
+        f"({deleted} message(s) removed)"
+    )
+    return {"message": "Session deleted", "session_id": session_id, "deleted_count": deleted}
 
 
 @router.get("/sessions")

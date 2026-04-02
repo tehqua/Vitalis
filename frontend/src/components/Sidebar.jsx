@@ -133,6 +133,29 @@ const s = {
     gap: "0.4rem",
   },
 
+  historyItemRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.25rem",
+    width: "100%",
+  },
+
+  deleteBtn: {
+    flexShrink: 0,
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    padding: "0.15rem 0.2rem",
+    borderRadius: "0.3rem",
+    color: "#94a3b8",
+    display: "flex",
+    alignItems: "center",
+    opacity: 0,
+    pointerEvents: "none",
+    transition: "opacity 140ms ease, color 140ms ease",
+    fontSize: "0.875rem",
+  },
+
   footer: {
     padding: "0.75rem 0.625rem",
     borderTop: "1px solid rgba(241,245,249,0.8)",
@@ -146,6 +169,7 @@ export default function Sidebar({
   onViewHistory,
   onSelectSession,
   onViewRecord,          // callback: open PatientRecordPanel
+  onDeleteSession,       // callback: delete a session by session_id
   historyItems = [],
   historyLoading = false,
 }) {
@@ -239,37 +263,75 @@ export default function Sidebar({
           <div style={s.emptyHistory}>No history yet</div>
         ) : (
           historyItems.map((item, idx) => (
-            <button
+            <div
               key={item.session_id || idx}
-              style={s.historyLink}
-              title={item.title}
-              onClick={() => {
-                setActive("consults");
-                if (onSelectSession && item.session_id) {
-                  onSelectSession(item.session_id);
-                } else if (onViewHistory) {
-                  onViewHistory();
-                }
-              }}
+              style={{ position: "relative", display: "flex", alignItems: "stretch" }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.color = "#0d9488";
-                e.currentTarget.style.background = "rgba(255,255,255,0.45)";
+                const btn = e.currentTarget.querySelector(".del-btn");
+                if (btn) { btn.style.opacity = "1"; btn.style.pointerEvents = "auto"; }
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.color = "#64748b";
-                e.currentTarget.style.background = "none";
+                const btn = e.currentTarget.querySelector(".del-btn");
+                if (btn) { btn.style.opacity = "0"; btn.style.pointerEvents = "none"; }
               }}
             >
-              <span style={s.historyTitle}>{item.title}</span>
-              <span style={s.historyDate}>
-                {item.dateKey}
-                {item.message_count > 0 && (
-                  <span style={{ marginLeft: "0.4rem", color: "#94a3b8" }}>
-                    · {item.message_count} msg{item.message_count !== 1 ? "s" : ""}
-                  </span>
-                )}
-              </span>
-            </button>
+              <button
+                style={{ ...s.historyLink, flex: 1 }}
+                title={item.title}
+                onClick={() => {
+                  setActive("consults");
+                  if (onSelectSession && item.session_id) {
+                    onSelectSession(item.session_id);
+                  } else if (onViewHistory) {
+                    onViewHistory();
+                  }
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "#0d9488";
+                  e.currentTarget.style.background = "rgba(255,255,255,0.45)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "#64748b";
+                  e.currentTarget.style.background = "none";
+                }}
+              >
+                <span style={s.historyTitle}>{item.title}</span>
+                <span style={s.historyDate}>
+                  {item.dateKey}
+                  {item.message_count > 0 && (
+                    <span style={{ marginLeft: "0.4rem", color: "#94a3b8" }}>
+                      · {item.message_count} msg{item.message_count !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </span>
+              </button>
+
+              {/* Trash button — visible only on hover */}
+              <button
+                className="del-btn"
+                style={s.deleteBtn}
+                title="Delete this conversation"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (
+                    onDeleteSession &&
+                    window.confirm("Xóa cuộc trò chuyện này? Hành động không thể hoàn tác.")
+                  ) {
+                    onDeleteSession(item.session_id);
+                  }
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "#dc2626";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "#94a3b8";
+                }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: "1rem" }}>
+                  delete
+                </span>
+              </button>
+            </div>
           ))
         )}
       </nav>

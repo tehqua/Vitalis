@@ -453,6 +453,34 @@ class Database:
         sessions = await self.db.conversations.aggregate(pipeline).to_list(length=limit)
         return sessions
 
+    async def delete_session_conversations(
+        self,
+        session_id: str,
+        patient_id: str,
+    ) -> int:
+        """
+        Delete all conversation records for a session.
+
+        Ownership is enforced: only documents belonging to the given
+        patient_id will be deleted, preventing patients from wiping
+        another patient's history.
+
+        Args:
+            session_id: Session identifier to delete
+            patient_id: Patient making the request (must own the session)
+
+        Returns:
+            Number of conversation documents deleted
+        """
+        result = await self.db.conversations.delete_many(
+            {"session_id": session_id, "patient_id": patient_id}
+        )
+        logger.info(
+            f"Deleted {result.deleted_count} conversation(s) "
+            f"for session={session_id} patient={patient_id}"
+        )
+        return result.deleted_count
+
 
 # Global database instance
 db = Database()
