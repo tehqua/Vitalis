@@ -57,6 +57,57 @@ class TestGuardrails:
         
         assert is_valid is True
         assert len(violations) == 0
+
+    def test_validate_image_analysis_response(self):
+        """
+        Kiểm tra response mô tả kết quả phân tích ảnh ML không bị block.
+        Đây là case lỗi chính: image analysis context phải được pass qua.
+        """
+        response = (
+            "Based on image analysis, the lesion appears to be a vascular benign condition "
+            "with 100% confidence. This is an AI-generated classification — please consult "
+            "a dermatologist for professional evaluation."
+        )
+        is_valid, violations = self.guardrails.validate_response(response)
+        assert is_valid is True, f"Image analysis response bị block sai: {violations}"
+
+    def test_validate_you_have_with_per_sentence_qualifier(self):
+        """
+        Kiểm tra câu 'you have a ... condition' có qualifier trong cùng câu thì pass.
+        """
+        response = "You have a skin lesion that may be benign. Please consult a dermatologist."
+        is_valid, violations = self.guardrails.validate_response(response)
+        assert is_valid is True, f"Response với qualifier bị block sai: {violations}"
+
+    def test_validate_definitive_diagnosis_blocked(self):
+        """
+        Kiểm tra câu chẩn đoán dứt khoát (không có qualifier) bị block đúng.
+        """
+        response = "You have a severe skin disease. This is confirmed."
+        is_valid, violations = self.guardrails.validate_response(response)
+        assert is_valid is False, "Câu chẩn đoán dứt khoát phải bị block"
+
+    def test_validate_prohibited_phrase_still_blocked(self):
+        """
+        Kiểm tra prohibited phrases cứng vẫn bị block dù có image analysis context.
+        """
+        response = "You are diagnosed with melanoma."
+        is_valid, violations = self.guardrails.validate_response(response)
+        assert is_valid is False, "Prohibited phrase 'diagnosed with' phải bị block"
+        assert any("Prohibited phrase" in v for v in violations)
+
+    def test_validate_high_confidence_classification_passes(self):
+        """
+        Mô phỏng đúng case lỗi gốc: classification 100% confidence không bị block.
+        """
+        response = (
+            "The image analysis classified this as Vascular Benign with a confidence of 100%. "
+            "Based on the image, the skin lesion shows characteristics consistent with a vascular "
+            "benign condition. I recommend consulting a healthcare professional for a formal evaluation."
+        )
+        is_valid, violations = self.guardrails.validate_response(response)
+        assert is_valid is True, f"Classification response bị block sai: {violations}"
+
     
     def test_add_disclaimer(self):
         """Test medical disclaimer is added"""

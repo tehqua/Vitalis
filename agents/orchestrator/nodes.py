@@ -213,7 +213,16 @@ class WorkflowNodes:
         user_input = extract_text_from_state(state)
         
         if not user_input:
-            user_input = "Hello"  # Default for image-only inputs
+            # Try to recover the actual user question from conversation history
+            for msg in reversed(state.get("messages", [])):
+                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+                if role == "user" and content:
+                    user_input = content
+                    break
+            if not user_input:
+                # Final fallback for true image-only inputs (no text at all)
+                user_input = "Please analyze the image I uploaded and explain what you see."
         
         # Sanitize input
         user_input = self.guardrails.sanitize_input(user_input)
@@ -402,15 +411,28 @@ class WorkflowNodes:
         
         # Validate response
         is_valid, violations = self.guardrails.validate_response(response)
-        
+
         if not is_valid:
-            logger.error(f"Response validation failed: {violations}")
-            # Sanitize response
-            response = (
-                "I apologize, but I need to rephrase my response to ensure "
-                "it follows medical guidance protocols. Please rephrase your "
-                "question and I'll provide appropriate information."
-            )
+            # Phân biệt vi phạm cứng (prohibited phrases) vs vi phạm nhẹ (diagnosis patterns)
+            hard_violations = [v for v in violations if v.startswith("Prohibited phrase")]
+            soft_violations = [v for v in violations if not v.startswith("Prohibited phrase")]
+
+            if hard_violations:
+                # Vi phạm cứng → thay toàn bộ response
+                logger.error(f"Hard violation detected, replacing response: {hard_violations}")
+                response = (
+                    "I'm sorry, but I'm unable to provide that type of medical advice. "
+                    "Please consult a qualified healthcare professional for a proper diagnosis."
+                )
+            else:
+                # Chỉ vi phạm nhẹ (diagnosis pattern) → giữ response, append disclaimer
+                logger.warning(f"Soft violation detected, appending disclaimer: {soft_violations}")
+                response = (
+                    response
+                    + "\n\n*Note: The above information is based on AI analysis and is not a "
+                    "substitute for professional medical diagnosis. Please consult a healthcare "
+                    "provider for an official evaluation.*"
+                )
         
         # Check privacy
         privacy_ok = self.guardrails.validate_patient_privacy(

@@ -91,6 +91,39 @@ class MedicalGuardrails:
         is_emergency = len(detected_symptoms) > 0
         return is_emergency, detected_symptoms
     
+    # Ngữ cảnh cho thấy response đang mô tả kết quả ML/AI (không phải chẩn đoán của bác sĩ)
+    IMAGE_ANALYSIS_INDICATORS = [
+        "based on image analysis",
+        "based on the image",
+        "image analysis",
+        "classified as",
+        "classification",
+        "confidence",
+        "the model",
+        "the analysis",
+        "analysis indicates",
+        "analysis suggests",
+        "skin condition appears",
+        "lesion appears",
+    ]
+
+    # Qualifying words thể hiện sự không chắc chắn / hedging
+    QUALIFYING_WORDS = [
+        "may", "might", "could", "possibly", "suggests",
+        "appears", "seems", "likely", "potential", "possible",
+        "analysis indicates", "classified as", "based on",
+        "consistent with", "indicative of", "associated with",
+    ]
+
+    def _is_image_analysis_context(self, response_lower: str) -> bool:
+        """Kiểm tra xem response có đang mô tả kết quả phân tích ảnh ML không."""
+        return any(indicator in response_lower for indicator in self.IMAGE_ANALYSIS_INDICATORS)
+
+    def _sentence_has_qualifier(self, sentence: str) -> bool:
+        """Kiểm tra xem một câu cụ thể có chứa qualifying word không."""
+        s = sentence.lower()
+        return any(q in s for q in self.QUALIFYING_WORDS)
+
     def validate_response(self, response: str) -> Tuple[bool, List[str]]:
         """
         Validate that response doesn't contain prohibited content.
@@ -104,24 +137,39 @@ class MedicalGuardrails:
         response_lower = response.lower()
         violations = []
         
-        # Check for prohibited phrases
+        # Kiểm tra prohibited phrases cứng (luôn block)
         for phrase in self.PROHIBITED_PHRASES:
             if phrase in response_lower:
                 violations.append(f"Prohibited phrase detected: '{phrase}'")
                 logger.error(f"Response contains prohibited phrase: {phrase}")
         
-        # Check for definitive diagnoses (heuristic)
+        # Nếu response đang mô tả kết quả phân tích ảnh ML → bỏ qua diagnosis pattern rules
+        if self._is_image_analysis_context(response_lower):
+            logger.debug("Image analysis context detected — skipping diagnosis pattern check")
+            is_valid = len(violations) == 0
+            return is_valid, violations
+
+        # Kiểm tra definitive diagnosis: tách từng câu, kiểm tra per-sentence
+        # Pattern thu hẹp: chỉ bắt khi có danh từ bệnh/tình trạng cụ thể (≥2 từ sau article)
         diagnosis_patterns = [
-            r'\byou have (a|an|the) \w+',
+            r'\byou have (a|an|the) (?:\w+ ){1,3}(?:condition|disease|disorder|infection|syndrome|cancer|tumor|lesion|rash|injury)\b',
             r'\bdiagnosed with\b',
             r'\byou are suffering from\b',
         ]
-        
-        for pattern in diagnosis_patterns:
-            if re.search(pattern, response_lower):
-                # Allow if it contains qualifying language
-                if not any(qual in response_lower for qual in ["may", "might", "could", "possibly", "suggests"]):
-                    violations.append(f"Potentially definitive diagnosis: '{pattern}'")
+
+        # Tách response thành từng câu
+        sentences = re.split(r'(?<=[.!?])\s+', response)
+
+        for sentence in sentences:
+            sentence_lower = sentence.lower()
+            for pattern in diagnosis_patterns:
+                if re.search(pattern, sentence_lower):
+                    # Chỉ block nếu câu đó KHÔNG có qualifying word
+                    if not self._sentence_has_qualifier(sentence_lower):
+                        violations.append(
+                            f"Potentially definitive diagnosis in sentence: \"{sentence.strip()[:80]}...\""
+                        )
+                        logger.warning(f"Diagnosis pattern matched without qualifier: {pattern}")
         
         is_valid = len(violations) == 0
         return is_valid, violations
