@@ -91,17 +91,20 @@ const s = {
     display: "flex",
     flexDirection: "column",
     gap: "0.15rem",
-    padding: "0.45rem 0.75rem",
+    padding: "0.45rem 0.5rem 0.45rem 0.75rem",
     borderRadius: "0.5rem",
     fontSize: "0.8125rem",
     color: "#64748b",
     cursor: "pointer",
     background: "none",
     border: "none",
-    width: "100%",
+    /* flex:1 + minWidth:0 lets the title truncate instead of overflow */
+    flex: 1,
+    minWidth: 0,
     textAlign: "left",
     fontFamily: "var(--font-body)",
     transition: "color 140ms ease, background 140ms ease",
+    overflow: "hidden",
   },
 
   historyTitle: {
@@ -110,11 +113,18 @@ const s = {
     textOverflow: "ellipsis",
     fontSize: "0.8125rem",
     color: "#334155",
+    display: "block",
+    width: "100%",
   },
 
   historyDate: {
     fontSize: "0.7rem",
     color: "#94a3b8",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    display: "block",
+    width: "100%",
   },
 
   emptyHistory: {
@@ -138,6 +148,7 @@ const s = {
     alignItems: "center",
     gap: "0.25rem",
     width: "100%",
+    overflow: "hidden",
   },
 
   deleteBtn: {
@@ -265,7 +276,13 @@ export default function Sidebar({
           historyItems.map((item, idx) => (
             <div
               key={item.session_id || idx}
-              style={{ position: "relative", display: "flex", alignItems: "stretch" }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                width: "100%",
+                overflow: "hidden",
+                borderRadius: "0.5rem",
+              }}
               onMouseEnter={(e) => {
                 const btn = e.currentTarget.querySelector(".del-btn");
                 if (btn) { btn.style.opacity = "1"; btn.style.pointerEvents = "auto"; }
@@ -276,7 +293,7 @@ export default function Sidebar({
               }}
             >
               <button
-                style={{ ...s.historyLink, flex: 1 }}
+                style={s.historyLink}
                 title={item.title}
                 onClick={() => {
                   setActive("consults");
@@ -306,7 +323,7 @@ export default function Sidebar({
                 </span>
               </button>
 
-              {/* Trash button — visible only on hover */}
+              {/* Trash button — always within view, shown on hover */}
               <button
                 className="del-btn"
                 style={s.deleteBtn}
@@ -315,7 +332,7 @@ export default function Sidebar({
                   e.stopPropagation();
                   if (
                     onDeleteSession &&
-                    window.confirm("Xóa cuộc trò chuyện này? Hành động không thể hoàn tác.")
+                    window.confirm("Delete this conversation? This action cannot be undone.")
                   ) {
                     onDeleteSession(item.session_id);
                   }
