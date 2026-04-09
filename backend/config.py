@@ -69,6 +69,24 @@ class Settings(BaseSettings):
         default="../agents/patient_database/data/vectordb",
         env="PATIENT_DB_VECTOR_DIR"
     )
+
+    # Medical Document RAG (rag_hierarchical_index)
+    MEDICAL_DOC_RAG_ENABLED: bool = Field(
+        default=True,
+        env="MEDICAL_DOC_RAG_ENABLED"
+    )
+    MEDICAL_DOC_PERSIST_DIR: str = Field(
+        default="../rag_hierarchical_index/large_medical_doc_index",
+        env="MEDICAL_DOC_PERSIST_DIR"
+    )
+    MEDICAL_DOC_MIN_SCORE: float = Field(
+        default=0.6,
+        env="MEDICAL_DOC_MIN_SCORE"
+    )
+    MEDICAL_DOC_MAX_CONTEXT_NODES: int = Field(
+        default=3,
+        env="MEDICAL_DOC_MAX_CONTEXT_NODES"
+    )
     
     class Config:
         env_file = ".env"

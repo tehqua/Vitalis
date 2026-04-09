@@ -160,6 +160,26 @@ def format_rag_context_prompt(rag_result: dict) -> str:
     return RAG_CONTEXT_PROMPT.format(context=context)
 
 
+MEDICAL_DOC_CONTEXT_PROMPT = """
+The following information has been retrieved from general medical knowledge documents:
+
+{context}
+
+INSTRUCTIONS:
+1. Use this medical knowledge to provide accurate, evidence-based responses
+2. Reference specific medical facts from the context when relevant
+3. This is GENERAL medical knowledge — not specific to this patient's records
+4. If the context contradicts general guidance, prioritize patient safety
+5. Combine this knowledge with your own expertise to give a complete answer
+"""
+
+
+def format_medical_doc_context_prompt(context: str) -> str:
+    """Format the medical document RAG context prompt"""
+    return MEDICAL_DOC_CONTEXT_PROMPT.format(context=context)
+
+
+
 def format_emergency_prompt(user_message: str, indicators: list) -> str:
     """Format the emergency detection prompt"""
     return EMERGENCY_DETECTION_PROMPT.format(

@@ -123,6 +123,7 @@ class MedicalChatbotAgent:
         workflow.add_node("input_router", self.nodes.input_router)
         workflow.add_node("process_speech", self.nodes.process_speech)
         workflow.add_node("process_image", self.nodes.process_image)
+        workflow.add_node("medical_doc_rag", self.nodes.medical_doc_rag_node)
         workflow.add_node("reasoning", self.nodes.reasoning_node)
         workflow.add_node("call_tool", self.nodes.call_tool)
         workflow.add_node("safety_check", self.nodes.safety_check)
@@ -132,29 +133,36 @@ class MedicalChatbotAgent:
         workflow.set_entry_point("input_router")
         
         # Add conditional edges from input_router
+        # Text-only queries go to medical_doc_rag first (enriches answer with doc context).
+        # Image/speech queries bypass it (handled by dedicated processors).
         workflow.add_conditional_edges(
             "input_router",
             self._route_from_input,
             {
                 "process_speech": "process_speech",
                 "process_image": "process_image",
-                "reasoning": "reasoning",
+                "medical_doc_rag": "medical_doc_rag",
                 "error": "error_handler",
             }
         )
         
         # Add edges from process_speech
+        # If an image follows speech, go straight to process_image (skip doc RAG).
+        # If text-only speech, go to medical_doc_rag for context enrichment.
         workflow.add_conditional_edges(
             "process_speech",
             self._route_after_speech,
             {
                 "process_image": "process_image",
-                "reasoning": "reasoning",
+                "medical_doc_rag": "medical_doc_rag",
             }
         )
         
-        # Add edge from process_image
+        # Image queries skip medical_doc_rag (image analysis context is sufficient)
         workflow.add_edge("process_image", "reasoning")
+
+        # Medical doc RAG always feeds into reasoning
+        workflow.add_edge("medical_doc_rag", "reasoning")
         
         # Add conditional edges from reasoning
         workflow.add_conditional_edges(
@@ -183,7 +191,7 @@ class MedicalChatbotAgent:
     
     def _route_from_input(self, state: AgentState) -> str:
         """Routing logic from input_router node"""
-        decision = state.get("routing_decision", "reasoning")
+        decision = state.get("routing_decision", "medical_doc_rag")
         
         if decision == "error":
             return "error"
@@ -192,16 +200,19 @@ class MedicalChatbotAgent:
         elif decision == "process_image":
             return "process_image"
         else:
-            return "reasoning"
+            # text-only: route through Medical Doc RAG before reasoning
+            return "medical_doc_rag"
     
     def _route_after_speech(self, state: AgentState) -> str:
         """Routing logic after speech processing"""
-        decision = state.get("routing_decision", "reasoning")
+        decision = state.get("routing_decision", "medical_doc_rag")
         
         if decision == "process_image":
+            # multimodal (speech + image): image analysis replaces doc RAG
             return "process_image"
         else:
-            return "reasoning"
+            # speech-only: enrich with medical doc context
+            return "medical_doc_rag"
     
     def _route_from_reasoning(self, state: AgentState) -> str:
         """Routing logic from reasoning node"""
@@ -252,6 +263,7 @@ class MedicalChatbotAgent:
             "image_analysis_result": None,
             "rag_context": None,
             "rag_needed": False,
+            "medical_doc_context": None,
             "routing_decision": "",
             "requires_tool_call": False,
             "tool_calls_completed": [],

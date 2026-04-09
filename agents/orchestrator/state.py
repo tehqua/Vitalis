@@ -41,8 +41,9 @@ class AgentState(TypedDict):
     image_analysis_result: Optional[Dict[str, Any]]
     
     # RAG context
-    rag_context: Optional[Dict[str, Any]]
+    rag_context: Optional[Dict[str, Any]]   # Patient medical records context
     rag_needed: bool
+    medical_doc_context: Optional[str]      # General medical document context (rag_hierarchical_index)
     
     # Routing decisions
     routing_decision: str

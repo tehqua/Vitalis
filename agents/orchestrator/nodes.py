@@ -13,7 +13,9 @@ from .prompts import (
     format_image_analysis_prompt,
     format_rag_context_prompt,
     format_emergency_prompt,
+    format_medical_doc_context_prompt,
 )
+from .medical_doc_rag import MedicalDocRAGService
 from .guardrails import MedicalGuardrails, InputValidator
 from .utils import (
     determine_input_type,
@@ -57,6 +59,15 @@ class WorkflowNodes:
             require_disclaimer=config.require_medical_disclaimer
         )
         self.validator = InputValidator()
+
+        # Initialize Medical Document RAG service (singleton, lazy-loads on first query)
+        self.medical_doc_rag: MedicalDocRAGService | None = None
+        if getattr(config, "medical_doc_rag_enabled", True):
+            try:
+                self.medical_doc_rag = MedicalDocRAGService.get_instance(config)
+                logger.info("MedicalDocRAGService registered in WorkflowNodes")
+            except Exception as e:
+                logger.error("Failed to create MedicalDocRAGService: %s", e, exc_info=True)
     
     def input_router(self, state: AgentState) -> AgentState:
         """
@@ -197,7 +208,54 @@ class WorkflowNodes:
             state["routing_decision"] = "reasoning"
         
         return state
-    
+
+    def medical_doc_rag_node(self, state: AgentState) -> AgentState:
+        """
+        Retrieve context from the hierarchical medical document index.
+
+        Triggered only for text-only queries (no image). On timeout or error
+        this node sets medical_doc_context to None and continues gracefully
+        so the LLM still answers — just without the extra document context.
+        """
+        logger.info("Node: medical_doc_rag_node")
+
+        query = extract_text_from_state(state)
+        if not query:
+            # Try conversation history as fallback
+            for msg in reversed(state.get("messages", [])):
+                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+                if role == "user" and content:
+                    query = content
+                    break
+
+        if not query:
+            logger.warning("medical_doc_rag_node: no query found, skipping retrieval")
+            state["medical_doc_context"] = None
+            state["routing_decision"] = "reasoning"
+            return state
+
+        if self.medical_doc_rag is None:
+            logger.warning("medical_doc_rag_node: service not available, skipping")
+            state["medical_doc_context"] = None
+            state["routing_decision"] = "reasoning"
+            return state
+
+        context = self.medical_doc_rag.retrieve(query)
+        state["medical_doc_context"] = context  # None on timeout/error — that's fine
+
+        if context:
+            logger.info(
+                "medical_doc_rag_node: context retrieved (%d chars)", len(context)
+            )
+        else:
+            logger.info(
+                "medical_doc_rag_node: no context retrieved (fallback to LLM-only)"
+            )
+
+        state["routing_decision"] = "reasoning"
+        return state
+
     def reasoning_node(self, state: AgentState) -> AgentState:
         """
         Main reasoning node using LLM to process user request.
@@ -245,11 +303,17 @@ class WorkflowNodes:
             if "error" not in analysis:
                 context_parts.append(format_image_analysis_prompt(analysis))
         
-        # Add RAG context if available
+        # Add Patient RAG context if available
         if state.get("rag_context"):
             context_parts.append(format_rag_context_prompt(state["rag_context"]))
-        
-        # Determine if RAG is needed
+
+        # Add Medical Document RAG context if available (text-only queries)
+        if state.get("medical_doc_context"):
+            context_parts.append(
+                format_medical_doc_context_prompt(state["medical_doc_context"])
+            )
+
+        # Determine if Patient RAG is needed
         rag_keywords = [
             "my", "history", "record", "medication", "prescription",
             "visit", "test", "result", "doctor", "appointment",
