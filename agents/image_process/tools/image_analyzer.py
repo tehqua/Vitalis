@@ -16,60 +16,64 @@ from .base import BaseTool
 
 logger = logging.getLogger(__name__)
 
+# Fallback name used when the model predicts a class index beyond the known list
+_UNKNOWN_CLASS_NAME = "Other_Skin_Condition"
+
 
 CLASS_NAMES = [
-    "Eczema_Dermatitis",
-    "Bacterial_Infections",
-    "Fungal_Infections",
-    "Viral_Infections",
-    "Infestations",
-    "Acneiform",
-    "Vascular_Benign",
-    "Healthy_Skin"
+    "Eczema_Dermatitis",       # 0
+    "Bacterial_Infections",    # 1
+    "Fungal_Infections",       # 2
+    "Viral_Infections",        # 3
+    "Infestations",            # 4
+    "Acneiform",               # 5
+    "Vascular_Benign",         # 6
+    "Other_Skin_Condition",    # 7 — new class added in new dataset
+    "Healthy_Skin",            # 8 — shifted from index 7 in old model
 ]
 
 
 class ImageAnalyzerTool(BaseTool):
-    """Tool for analyzing skin images using Derm Foundation model."""
+    """Tool for analyzing skin images using Derm Foundation + XGBoost classifier."""
 
     def __init__(
         self,
-        logreg_path: str,
+        classifier_path: str,
         derm_model_path: str,
     ):
         """
         Initialize the image analyzer tool.
 
         Args:
-            logreg_path: Path to trained Logistic Regression model (.pkl)
+            classifier_path: Path to trained XGBoost classifier model (.pkl)
             derm_model_path: Path to Derm Foundation model directory
         """
         super().__init__(
             name="analyze_skin_image",
             description="Analyze skin images to classify dermatological conditions"
         )
-        self.logreg_path = logreg_path
+        self.classifier_path = classifier_path
         self.derm_model_path = derm_model_path
-        self._logreg = None
+        self._classifier = None
         self._derm_layer = None
         self._derm_model = None
 
     def _initialize_models(self):
         """Initialize models lazily on first use."""
-        if self._logreg is not None and self._derm_model is not None:
+        if self._classifier is not None and self._derm_model is not None:
             return
 
         logger.info("Initializing image analysis models")
 
         try:
-            # Load Logistic Regression classifier
-            if not os.path.exists(self.logreg_path):
+            # Load XGBoost classifier
+            if not os.path.exists(self.classifier_path):
                 raise FileNotFoundError(
-                    f"Logistic Regression model not found: {self.logreg_path}"
+                    f"XGBoost classifier model not found: {self.classifier_path}"
                 )
             
-            logger.info(f"Loading Logistic Regression from: {self.logreg_path}")
-            self._logreg = joblib.load(self.logreg_path)
+            logger.info(f"Loading XGBoost classifier from: {self.classifier_path}")
+            self._classifier = joblib.load(self.classifier_path)
 
             # Load Derm Foundation model
             if not os.path.exists(self.derm_model_path):
@@ -167,20 +171,27 @@ class ImageAnalyzerTool(BaseTool):
             logger.info(f"Extracting embedding from: {image_path}")
             embedding = self._encode_image(image_path)
             
-            # Reshape for sklearn
+            # Reshape for sklearn-compatible API (XGBoost uses same interface)
             embedding_reshaped = embedding.reshape(1, -1)
             
-            # Predict class
-            pred_class = self._logreg.predict(embedding_reshaped)[0]
-            pred_proba = self._logreg.predict_proba(embedding_reshaped)[0]
+            # Predict class using XGBoost classifier
+            pred_class = int(self._classifier.predict(embedding_reshaped)[0])
+            pred_proba = self._classifier.predict_proba(embedding_reshaped)[0]
+            
+            # Safe class name lookup — handles class indices beyond known list
+            class_name = (
+                CLASS_NAMES[pred_class]
+                if pred_class < len(CLASS_NAMES)
+                else _UNKNOWN_CLASS_NAME
+            )
             
             # Format results
             result = {
-                "class_id": int(pred_class),
-                "class_name": CLASS_NAMES[pred_class],
+                "class_id": pred_class,
+                "class_name": class_name,
                 "confidence": float(pred_proba[pred_class]),
                 "all_probabilities": {
-                    CLASS_NAMES[i]: float(prob) 
+                    (CLASS_NAMES[i] if i < len(CLASS_NAMES) else f"{_UNKNOWN_CLASS_NAME}_{i}"): float(prob)
                     for i, prob in enumerate(pred_proba)
                 }
             }

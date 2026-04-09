@@ -25,8 +25,9 @@ class LangGraphImageAnalyzerTool(LangChainBaseTool):
     """LangGraph-compatible image analysis tool.
 
     Analyzes skin images to classify dermatological conditions using
-    Google's Derm Foundation model combined with a trained Logistic
-    Regression classifier. Predicts one of 8 clinical groups:
+    Google's Derm Foundation model combined with a trained XGBoost
+    classifier. Predicts one of 8 known clinical groups (with a fallback
+    for rare out-of-distribution classes):
     Eczema/Dermatitis, Bacterial Infections, Fungal Infections,
     Viral Infections, Infestations, Acneiform, Vascular/Benign, or
     Healthy Skin.
@@ -38,7 +39,7 @@ class LangGraphImageAnalyzerTool(LangChainBaseTool):
         "Use this tool when you need to identify or diagnose skin "
         "conditions from clinical photographs. The tool uses a deep "
         "learning model (Derm Foundation) to extract image features and "
-        "a Logistic Regression classifier to predict one of 8 clinical "
+        "an XGBoost classifier to predict one of 8 clinical "
         "categories: Eczema/Dermatitis, Bacterial Infections, Fungal "
         "Infections, Viral Infections, Infestations, Acneiform, "
         "Vascular/Benign lesions, or Healthy Skin. "
@@ -50,7 +51,7 @@ class LangGraphImageAnalyzerTool(LangChainBaseTool):
 
     def __init__(
         self,
-        logreg_path: str,
+        classifier_path: str,
         derm_model_path: str,
         **kwargs,
     ):
@@ -58,13 +59,13 @@ class LangGraphImageAnalyzerTool(LangChainBaseTool):
         Initialize the LangGraph image analyzer tool.
 
         Args:
-            logreg_path: Path to trained Logistic Regression model
+            classifier_path: Path to trained XGBoost classifier model
             derm_model_path: Path to Derm Foundation model directory
             **kwargs: Additional arguments for LangChainBaseTool
         """
         super().__init__(**kwargs)
         self._tool = _ImageAnalyzerTool(
-            logreg_path=logreg_path,
+            classifier_path=classifier_path,
             derm_model_path=derm_model_path
         )
 

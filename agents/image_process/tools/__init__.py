@@ -19,14 +19,14 @@ from .langgraph_tools import LangGraphImageAnalyzerTool
 _MODULE_DIR = Path(__file__).parent
 _PROJECT_ROOT = _MODULE_DIR.parent.parent.parent
 
-_LOGREG_PATH = (
+_CLASSIFIER_PATH = (
     _PROJECT_ROOT
     / "agents"
     / "image_process"
     / "data"
     / "outputs"
     / "models"
-    / "logreg_derm.pkl"
+    / "xgb_derm.pkl"
 )
 
 _DERM_MODEL_PATH = (
@@ -41,18 +41,18 @@ _DERM_MODEL_PATH = (
     / "a16a6ab4f87888948fe248136e697ed28146a1c6"
 )
 
-_LOGREG_PATH_STR = str(_LOGREG_PATH) if _LOGREG_PATH.exists() else None
+_CLASSIFIER_PATH_STR = str(_CLASSIFIER_PATH) if _CLASSIFIER_PATH.exists() else None
 _DERM_MODEL_PATH_STR = str(_DERM_MODEL_PATH) if _DERM_MODEL_PATH.exists() else None
 
 # Legacy tool instances
 image_analyzer_tool = ImageAnalyzerTool(
-    logreg_path=_LOGREG_PATH_STR,
+    classifier_path=_CLASSIFIER_PATH_STR,
     derm_model_path=_DERM_MODEL_PATH_STR
 )
 
 # LangGraph tool instances (ready for agent initialization)
 langgraph_image_analyzer = LangGraphImageAnalyzerTool(
-    logreg_path=_LOGREG_PATH_STR,
+    classifier_path=_CLASSIFIER_PATH_STR,
     derm_model_path=_DERM_MODEL_PATH_STR
 )
 
