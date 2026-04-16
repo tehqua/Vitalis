@@ -74,6 +74,27 @@ class Database:
         await self.db.uploads.create_index("session_id")
         await self.db.uploads.create_index("uploaded_at")
         
+        # Patient codes — admin managed
+        await self.db.patient_codes.create_index("patient_id", unique=True)
+        await self.db.patient_codes.create_index("status")
+        await self.db.patient_codes.create_index("issued_at")
+        
+        # Medications — admin managed
+        await self.db.medications.create_index("patient_id")
+        await self.db.medications.create_index("status")
+        await self.db.medications.create_index("created_at")
+        
+        # Reminder logs — written by email scheduler
+        await self.db.reminder_logs.create_index("patient_id")
+        await self.db.reminder_logs.create_index("sent_at")
+        await self.db.reminder_logs.create_index("status")
+        
+        # Support tickets (Forgot ID requests from patients)
+        await self.db.support_tickets.create_index("ticket_id", unique=True, sparse=True)
+        await self.db.support_tickets.create_index("type")
+        await self.db.support_tickets.create_index("status")
+        await self.db.support_tickets.create_index("submitted_at")
+        
         logger.info("Database indexes created")
     
     # Conversation operations

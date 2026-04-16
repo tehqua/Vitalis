@@ -11,7 +11,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from .config import Settings, get_settings
-from .routers import chat, upload, health, auth
+from .routers import chat, upload, health, auth, admin
 from .middleware import (
     LoggingMiddleware,
     ErrorHandlerMiddleware,
@@ -85,7 +85,7 @@ def create_application() -> FastAPI:
         lifespan=lifespan
     )
     
-    # CORS configuration
+    # CORS — include admin panel origin
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
@@ -112,6 +112,7 @@ def create_application() -> FastAPI:
     app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
     app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
     app.include_router(upload.router, prefix="/api/upload", tags=["Upload"])
+    app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
     
     # Root endpoint
     @app.get("/")

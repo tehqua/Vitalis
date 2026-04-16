@@ -22,12 +22,13 @@ class Settings(BaseSettings):
     
     # CORS settings
     CORS_ORIGINS: List[str] = Field(
-        default=["http://localhost:3000", "http://localhost:5173"],
+        default=["http://localhost:3000", "http://localhost:5173", "http://localhost:8080"],
         env="CORS_ORIGINS"
     )
     
     # Security settings
     SECRET_KEY: str = Field(default="your-secret-key-change-in-production", env="SECRET_KEY")
+    ADMIN_SECRET_KEY: str = Field(default="vitalis-admin-secret-change-in-production", env="ADMIN_SECRET_KEY")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60, env="ACCESS_TOKEN_EXPIRE_MINUTES")
     SESSION_EXPIRE_MINUTES: int = Field(default=30, env="SESSION_EXPIRE_MINUTES")
     

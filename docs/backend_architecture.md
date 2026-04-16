@@ -1,6 +1,6 @@
 # Backend Architecture - How It Works
 
-Comprehensive explanation of the Medical Chatbot Backend architecture, components, and workflows.
+Comprehensive explanation of the Vitalis Backend architecture, components, data flows, and security model.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ Comprehensive explanation of the Medical Chatbot Backend architecture, component
 
 ### System Architecture
 
-The backend is built as a **layered microservice architecture** using FastAPI, providing REST endpoints for a medical consultation chatbot system.
+The backend is built as a **layered architecture** using FastAPI, providing REST endpoints for the Vitalis medical consultation chatbot system.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -30,10 +30,14 @@ The backend is built as a **layered microservice architecture** using FastAPI, p
 ┌─────────────────────────────────────────────────────────────┐
 │                    API Gateway Layer                         │
 │                  (FastAPI + Middleware)                      │
-│  ┌──────────────┬──────────────┬──────────────────────┐    │
-│  │   CORS       │ Rate Limiter │  Security Headers    │    │
-│  │  Middleware  │  Middleware  │     Middleware       │    │
-│  └──────────────┴──────────────┴──────────────────────┘    │
+│  ┌──────────────┬──────────────┬───────────────────────┐   │
+│  │   CORS       │ Rate Limiter │  Security Headers      │   │
+│  │  Middleware  │  Middleware  │  (CSP, XSS, HSTS)     │   │
+│  └──────────────┴──────────────┴───────────────────────┘   │
+│  ┌──────────────┬──────────────┐                           │
+│  │   Logging    │ Error Handler│                           │
+│  │  Middleware  │  Middleware  │                           │
+│  └──────────────┴──────────────┘                           │
 └────────────────────┬────────────────────────────────────────┘
                      ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -67,12 +71,12 @@ The backend is built as a **layered microservice architecture** using FastAPI, p
 |-------|-----------|---------|
 | **Web Framework** | FastAPI 0.109 | Async REST API framework |
 | **ASGI Server** | Uvicorn | High-performance async server |
-| **Database** | MongoDB 7.0 | Document store for conversations |
+| **Database** | MongoDB 7.0 | Document store for conversations and sessions |
 | **Database Driver** | Motor 3.3 | Async MongoDB driver |
-| **Authentication** | JWT (python-jose) | Token-based auth |
-| **LLM Integration** | Ollama | Local LLM inference (MedGemma) |
-| **AI Orchestrator** | LangGraph | Agent workflow orchestration |
-| **File Handling** | aiofiles, python-magic | Async I/O, type detection |
+| **Authentication** | JWT (python-jose, HS256) | Token-based auth |
+| **LLM Integration** | Ollama | Local LLM inference (MedGemma 4B) |
+| **AI Orchestration** | LangGraph | Stateful agent workflow |
+| **File Handling** | aiofiles, python-magic | Async I/O, MIME type detection |
 | **Validation** | Pydantic 2.5 | Data validation & serialization |
 
 ---
@@ -83,31 +87,26 @@ The backend is built as a **layered microservice architecture** using FastAPI, p
 
 Middleware processes every request before it reaches routers and every response before returning to client.
 
-**Execution Order:**
+**Execution Order (outside → inside):**
 ```
-Request → CORS → Logging → Rate Limiter → Security Headers → Router
-Response ← CORS ← Logging ← Rate Limiter ← Security Headers ← Router
+Request → CORS → Logging → ErrorHandler → SecurityHeaders → RateLimit → Router
+Response ← CORS ← Logging ← ErrorHandler ← SecurityHeaders ← RateLimit ← Router
 ```
 
 #### CORS Middleware
 **Purpose:** Cross-Origin Resource Sharing  
-**What it does:**
-- Allows specified frontend domains to access API
-- Handles preflight OPTIONS requests
-- Adds CORS headers to responses
-
 **Configuration:**
 ```python
-allow_origins=["http://localhost:3000"]  # Frontend URL
-allow_credentials=True                    # Allow cookies
-allow_methods=["*"]                       # All HTTP methods
-allow_headers=["*"]                       # All headers
+allow_origins=["http://localhost:3000", "http://localhost:5173"]
+allow_credentials=True
+allow_methods=["*"]
+allow_headers=["*"]
 ```
 
 #### Logging Middleware
 **Purpose:** Request/Response tracking  
 **What it does:**
-- Generates unique request ID
+- Generates unique request ID (based on timestamp)
 - Logs request method, path, client IP
 - Measures processing time
 - Logs response status code
@@ -118,17 +117,23 @@ allow_headers=["*"]                       # All headers
 [1771221106.210276] POST /api/chat/message - 200 - 3.245s
 ```
 
+#### Error Handler Middleware
+**Purpose:** Catch unhandled exceptions  
+**What it does:**
+- Catches `ValueError` → 400 Bad Request
+- Catches any `Exception` → 500 Internal Server Error
+- Returns structured JSON error response
+
 #### Rate Limiter Middleware
 **Purpose:** Prevent abuse and DDoS  
 **What it does:**
-- Tracks requests per IP address
-- Implements sliding window algorithm
+- Tracks requests per IP address (in-memory, sliding window)
 - Limits: 20 requests/minute, 100 requests/hour (configurable)
 - Returns 429 Too Many Requests when exceeded
 
 **How it works:**
-```python
-# For each request from IP 192.168.1.100:
+```
+For each request from IP 192.168.1.100:
 1. Clean old requests (older than time window)
 2. Count requests in last 1 minute
 3. If count >= 20 → Reject with 429
@@ -137,7 +142,7 @@ allow_headers=["*"]                       # All headers
 6. Otherwise → Allow and record timestamp
 ```
 
-**Response Headers:**
+**Response Headers added:**
 ```
 X-RateLimit-Limit-Minute: 20
 X-RateLimit-Remaining-Minute: 15
@@ -145,43 +150,37 @@ X-RateLimit-Limit-Hour: 100
 X-RateLimit-Remaining-Hour: 85
 ```
 
+> ⚠️ **Limitation:** In-memory rate limiting does not survive multiple Uvicorn workers or horizontal scaling. For production multi-process deployments, replace with Redis-backed rate limiting.
+
 #### Security Headers Middleware
 **Purpose:** Web security best practices  
-**What it does:**
-- Adds security headers to prevent common attacks
-- Implements Content Security Policy (CSP)
-
 **Headers added:**
 ```
-X-Content-Type-Options: nosniff          # Prevent MIME sniffing
-X-Frame-Options: DENY                    # Prevent clickjacking
-X-XSS-Protection: 1; mode=block          # XSS protection
-Strict-Transport-Security: max-age=...   # Force HTTPS
-Content-Security-Policy: ...             # Script/style restrictions
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 1; mode=block
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+Content-Security-Policy: default-src 'self'; ...
 ```
 
 ### 2. Router Layer
 
-Routers handle specific API endpoint groups. Each router is a separate module.
-
 #### Auth Router (`routers/auth.py`)
 
 **Endpoints:**
-- `POST /api/auth/login` - Authenticate patient
-- `POST /api/auth/logout` - Invalidate session
+- `POST /api/auth/login` — Authenticate patient
+- `POST /api/auth/logout` — Invalidate session
 
 **Login Flow:**
 ```
 1. Receive patient_id
-2. Validate format (regex pattern)
-3. Check if patient exists (optional - currently accepts any valid format)
-4. Generate UUID for session_id
-5. Create session in database (MongoDB)
-6. Generate JWT token:
+2. Validate format (regex: ^[A-Z][a-z]+\d+_[A-Z][a-z]+\d+_<uuid36>$)
+3. Generate UUID for session_id
+4. Create session in MongoDB (TTL: 30 minutes)
+5. Generate JWT token:
    - Payload: {patient_id, session_id, exp}
-   - Sign with SECRET_KEY
-   - Algorithm: HS256
-7. Return token + session info
+   - Sign with SECRET_KEY (HS256)
+6. Return: {access_token, token_type, session_id, expires_in}
 ```
 
 **JWT Token Structure:**
@@ -194,117 +193,103 @@ eyJwYXR... ← Payload (patient_id, session_id, exp)
 #### Chat Router (`routers/chat.py`)
 
 **Endpoints:**
-- `POST /api/chat/message` - Text message
-- `POST /api/chat/message-with-image` - Message + image
-- `POST /api/chat/message-with-audio` - Audio message
-- `GET /api/chat/history` - Get conversation history
-- `DELETE /api/chat/history` - Clear history
+- `POST /api/chat/message` — Text message
+- `POST /api/chat/message-with-image` — Message + image (multipart)
+- `POST /api/chat/message-with-audio` — Audio message (multipart)
+- `GET /api/chat/history` — Get conversation history (paginated)
+- `DELETE /api/chat/history` — Clear history
 
 **Message Processing Flow:**
 ```
-1. Verify JWT token (authentication)
-2. Extract patient_id and session_id from token
-3. Validate message content
-4. Route to Orchestrator Service:
-   ├─ Text only → Direct to LLM
-   ├─ With image → Image analysis → LLM
-   └─ With audio → Speech-to-text → LLM
-5. Receive AI response
-6. Save to database:
-   - Collections: conversations
-   - Fields: {session_id, patient_id, message, response, metadata, created_at}
-7. Return response to client
+1. Verify JWT token → extract patient_id, session_id
+2. Validate session in MongoDB (active + not expired)
+3. Validate message content (Pydantic schema)
+4. [For image/audio] Save file via FileService
+5. Call OrchestratorService.process_message(patient_id, text, image_path, audio_path, session_id)
+6. Receive AI response + metadata
+7. Save conversation to MongoDB: {session_id, patient_id, message, response, metadata, created_at}
+8. Return ChatResponse: {response, session_id, timestamp, metadata}
 ```
 
 #### Upload Router (`routers/upload.py`)
 
 **Endpoints:**
-- `POST /api/upload/image` - Upload image file
-- `POST /api/upload/audio` - Upload audio file
-- `GET /api/upload/limits` - Get size/format limits
+- `POST /api/upload/image` — Upload image file
+- `POST /api/upload/audio` — Upload audio file
+- `GET /api/upload/limits` — Get size/format limits
 
 **Upload Flow:**
 ```
 1. Verify authentication
 2. Validate file:
    ├─ Extension check (.jpg, .png, .wav, etc.)
-   ├─ MIME type validation (using python-magic)
-   ├─ Size check (10MB for images, 50MB for audio)
-   └─ Content validation (magic numbers)
-3. Generate unique filename:
-   - Format: YYYYMMDD_HHMMSS_uuid.ext
-   - Example: 20240115_143025_a1b2c3d4-e5f6.jpg
+   ├─ MIME type validation (python-magic / magic number check)
+   ├─ Size check (10 MB for images, 50 MB for audio)
+   └─ Content validation
+3. Generate unique filename: YYYYMMDD_HHMMSS_<uuid>.<ext>
 4. Save asynchronously (aiofiles)
 5. Calculate SHA256 hash (integrity)
 6. Return file metadata
 ```
 
+**File upload limits:**
+- Images: `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp` — max **10 MB**
+- Audio: `.wav`, `.mp3`, `.m4a`, `.ogg`, `.webm` — max **50 MB**
+
 #### Health Router (`routers/health.py`)
 
 **Endpoint:**
-- `GET /api/health` - System health check
+- `GET /api/health` — System health check
 
-**Health Check Components:**
-```python
+**Health Check Response:**
+```json
 {
-  "status": "healthy",                    # Overall status
-  "version": "1.0.0",                     # API version
-  "timestamp": "2024-01-15T10:30:00Z",   # Current time
-  "orchestrator_status": "ready",         # AI agent status
-  "database_status": "healthy",           # MongoDB status
-  "ollama_status": "healthy"              # LLM service status
+  "status": "healthy",
+  "version": "1.0.0",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "orchestrator_status": "ready",
+  "database_status": "healthy",
+  "ollama_status": "healthy"
 }
-```
-
-**Database check:**
-```python
-await db.client.admin.command('ping')  # Ping MongoDB
-```
-
-**Ollama check:**
-```python
-response = await httpx.get("http://localhost:11434/api/tags", timeout=5.0)
 ```
 
 ### 3. Service Layer
 
-Services contain business logic separated from routers.
-
 #### Orchestrator Service (`services/orchestrator_service.py`)
 
-**Purpose:** Interface between backend and AI orchestrator  
+**Purpose:** Interface between backend REST layer and AI orchestrator agent  
 **Key Features:**
-- Session management
-- Retry logic for transient errors
-- Connection pooling
-- Health monitoring
+- Session tracking (in-memory, keyed by session_id)
+- Retry logic for transient errors (up to 2 retries)
+- `asyncio.run_in_executor` to run synchronous `graph.invoke()` without blocking the async event loop
+- Singleton via `@lru_cache()` — one shared instance
 
 **Class Structure:**
 ```python
 class OrchestratorService:
     def __init__(self):
-        self.agent = MedicalChatbotAgent()  # LangGraph agent
-        self.sessions = {}                   # Session tracking
-        self._http_client = None            # HTTP pool
-    
-    async def process_message(...):
+        self.agent = MedicalChatbotAgent()   # LangGraph agent
+        self.sessions = {}                    # In-memory session tracking
+        self._http_client = None             # HTTP pool
+
+    async def process_message(patient_id, text_input, session_id, image_path=None, audio_path=None):
         # 1. Update session tracking
-        # 2. Run in executor (agent is sync)
-        # 3. Implement retry logic
-        # 4. Return result or error
-    
+        # 2. Run graph.invoke() in thread executor (sync LangGraph call)
+        # 3. Implement retry logic on ConnectionError / TimeoutError
+        # 4. Return result dict or error response
+
     async def clear_memory(session_id):
-        # Clear conversation context
-    
+        # Clear conversation context for session
+
     async def cleanup_inactive_sessions():
-        # Remove old sessions
+        # Remove sessions inactive > 30 minutes
 ```
 
 **Session Management:**
 ```python
 sessions = {
     "session-uuid-123": {
-        "patient_id": "Adam631...",
+        "patient_id": "Adam631_Cronin387_...",
         "created_at": datetime(...),
         "last_activity": datetime(...),
         "message_count": 15
@@ -315,10 +300,10 @@ sessions = {
 **Retry Logic:**
 ```python
 try:
-    result = await process_message(...)
+    result = await run_in_executor(graph.invoke, initial_state)
 except (ConnectionError, TimeoutError) as e:
     if retry_count < 2:
-        await asyncio.sleep(1)  # Brief delay
+        await asyncio.sleep(1)
         return await process_message(..., retry_count + 1)
     else:
         return error_response
@@ -326,12 +311,12 @@ except (ConnectionError, TimeoutError) as e:
 
 #### File Service (`services/file_service.py`)
 
-**Purpose:** Handle file upload, validation, cleanup  
+**Purpose:** Handle file upload, validation, and cleanup  
 **Key Features:**
 - Async file I/O (aiofiles)
 - MIME type detection (python-magic)
 - SHA256 integrity hashing
-- Automatic cleanup scheduler
+- Automatic cleanup scheduler (files older than 7 days)
 
 **File Save Process:**
 ```python
@@ -339,29 +324,28 @@ async def save_uploaded_file(...):
     # 1. Validate extension
     if ext not in allowed_extensions:
         raise HTTPException(400, "Invalid extension")
-    
+
     # 2. Read content
     content = await file.read()
-    
+
     # 3. Validate size
     if len(content) > max_size_mb * 1024 * 1024:
         raise HTTPException(413, "File too large")
-    
+
     # 4. Validate MIME type (magic numbers)
     mime = magic.from_buffer(content, mime=True)
     if not mime.startswith(expected_type):
         raise HTTPException(400, "Invalid file content")
-    
-    # 5. Generate filename
-    filename = f"{timestamp}_{uuid}{ext}"
-    
+
+    # 5. Generate filename: YYYYMMDD_HHMMSS_<uuid>.<ext>
+    filename = f"{timestamp}_{uuid4_hex}{ext}"
+
     # 6. Save asynchronously
     async with aiofiles.open(path, "wb") as f:
         await f.write(content)
-    
-    # 7. Calculate hash
+
+    # 7. Calculate SHA256 hash for integrity
     file_hash = hashlib.sha256(content).hexdigest()
-    
     return file_path
 ```
 
@@ -371,14 +355,14 @@ async def cleanup_old_files(upload_dir, days_old=7):
     cutoff = datetime.now() - timedelta(days=days_old)
     for file in upload_dir.iterdir():
         if file.stat().st_mtime < cutoff:
-            file.unlink()  # Delete
+            file.unlink()
 ```
 
 ### 4. Database Layer
 
 #### MongoDB Collections
 
-**1. conversations**
+**1. `conversations`**
 ```javascript
 {
   _id: ObjectId("..."),
@@ -399,9 +383,9 @@ async def cleanup_old_files(upload_dir, days_old=7):
 **Indexes:**
 - `session_id` (for fast history lookup)
 - `patient_id` (for patient-specific queries)
-- `created_at` (for time-based queries)
+- `created_at` (for time-based queries, TTL cleanup)
 
-**2. sessions**
+**2. `sessions`**
 ```javascript
 {
   _id: ObjectId("..."),
@@ -418,25 +402,23 @@ async def cleanup_old_files(upload_dir, days_old=7):
 - `patient_id` (for patient sessions)
 - `expires_at` (for cleanup queries)
 
-#### Database Operations
+#### Database Operations (Motor Async Driver)
 
-**Motor (Async MongoDB Driver):**
 ```python
-# Find operation
+# Find
 cursor = db.conversations.find({"session_id": session_id})
 conversations = await cursor.to_list(length=50)
 
-# Insert operation
+# Insert
 result = await db.conversations.insert_one(document)
-inserted_id = result.inserted_id
 
-# Update operation
+# Update
 await db.sessions.update_one(
     {"session_id": session_id},
     {"$set": {"expires_at": new_time}}
 )
 
-# Delete operation
+# Delete
 result = await db.sessions.delete_many(
     {"expires_at": {"$lt": cutoff_time}}
 )
@@ -447,13 +429,11 @@ result = await db.sessions.delete_many(
 **Purpose:** Automated maintenance operations  
 **Location:** `scheduler.py`
 
-**Scheduled Tasks:**
-
 | Task | Frequency | Purpose |
 |------|-----------|---------|
-| Session cleanup | 30 minutes | Remove inactive sessions |
+| Session cleanup | 30 minutes | Remove inactive/expired sessions |
 | File cleanup | 60 minutes | Delete old uploaded files (7+ days) |
-| Database cleanup | 120 minutes | Remove expired records |
+| Database cleanup | 120 minutes | Remove expired conversation records |
 
 **Implementation:**
 ```python
@@ -461,14 +441,16 @@ class BackgroundScheduler:
     async def start(self):
         self.tasks = [
             asyncio.create_task(self._run_periodic(
-                self._cleanup_sessions, 30  # every 30 min
+                self._cleanup_sessions, interval_minutes=30
             )),
             asyncio.create_task(self._run_periodic(
-                self._cleanup_files, 60     # every 60 min
+                self._cleanup_files, interval_minutes=60
             )),
-            # ...
+            asyncio.create_task(self._run_periodic(
+                self._cleanup_database, interval_minutes=120
+            )),
         ]
-    
+
     async def _run_periodic(self, func, interval_minutes):
         while self.running:
             await func()
@@ -479,9 +461,7 @@ class BackgroundScheduler:
 
 ## Request Flow
 
-### Complete Request Lifecycle
-
-Let's trace a complete request: "User sends chat message with image"
+### Complete Request Lifecycle (Text + Image Example)
 
 ```
 Step 1: Client Request
@@ -497,30 +477,32 @@ Body:
 
 Step 2: Middleware Stack (Request Phase)
 ├─ CORS Middleware: Check origin → Add CORS headers
-├─ Logging Middleware: Log request, generate ID
-├─ Rate Limiter: Check IP limits → Allow (15/20)
-└─ Security Headers: (processed on response)
+├─ Logging Middleware: Log request, generate request ID
+├─ Error Handler: Wrap handler for exception safety
+├─ Security Headers: (processed on response)
+└─ Rate Limiter: Check IP limits → Allow (15/20)
 
 ↓
 
 Step 3: Router (chat.py)
 ├─ Route match: send_message_with_image()
 ├─ Dependency injection:
-│  ├─ get_current_user() → Verify JWT
-│  ├─ get_orchestrator_service() → Get service
-│  ├─ get_db() → Get database
-│  └─ get_settings() → Get config
+│  ├─ get_current_user() → Verify JWT + session DB check
+│  ├─ get_orchestrator_service() → lru_cache singleton
+│  ├─ get_db() → MongoDB connection
+│  └─ get_settings() → pydantic-settings config
 └─ Extract: message, image, current_user
 
 ↓
 
 Step 4: Authentication (auth.py)
-├─ Extract token from header
+├─ Extract token from Authorization header
 ├─ Decode JWT:
-│  ├─ Verify signature (HMAC-SHA256)
+│  ├─ Verify HMAC-SHA256 signature
 │  ├─ Check expiration
 │  └─ Extract: {patient_id, session_id}
-├─ Verify session in database
+├─ Verify session in MongoDB (active + not expired)
+├─ Extend session TTL on activity
 └─ Return: TokenData(patient_id, session_id)
 
 ↓
@@ -528,33 +510,29 @@ Step 4: Authentication (auth.py)
 Step 5: File Service
 ├─ Validate image file:
 │  ├─ Extension: .jpg ✓
-│  ├─ Size: 2.5MB < 10MB ✓
+│  ├─ Size: 2.5 MB < 10 MB ✓
 │  └─ MIME: image/jpeg ✓
-├─ Generate filename: 20240115_143025_uuid.jpg
-├─ Save to: uploads/20240115_143025_uuid.jpg
+├─ Generate filename: 20240115_143025_<uuid>.jpg
+├─ Save to: uploads/20240115_143025_<uuid>.jpg
 └─ Return: file_path
 
 ↓
 
 Step 6: Orchestrator Service
 ├─ Call: process_message(
-│    patient_id="Adam631...",
+│    patient_id="Adam631_...",
 │    text_input="What is this rash?",
-│    image_file_path="uploads/20240115_143025_uuid.jpg",
+│    image_file_path="uploads/20240115_143025_<uuid>.jpg",
 │    session_id="uuid-123"
 │  )
-├─ Orchestrator workflow:
-│  ├─ Input Router: Detect multimodal input
-│  ├─ Image Processing Node:
-│  │  ├─ Call: analyze_skin_image(file_path)
-│  │  └─ Result: {class: "Fungal_Infections", confidence: 0.587}
-│  ├─ Reasoning Node (MedGemma):
-│  │  ├─ Build context: image result + user message
-│  │  ├─ Call Ollama API → MedGemma LLM
-│  │  └─ Generate response
-│  └─ Safety Check Node:
-│     ├─ Validate response
-│     └─ Add disclaimer
+├─ Run via asyncio.run_in_executor (non-blocking for async loop)
+├─ LangGraph agent workflow:
+│  ├─ input_router: Detect image input → routing: process_image
+│  ├─ process_image: Derm Foundation + XGBoost
+│  │    → {class: "Eczema/Dermatitis", confidence: 0.87}
+│  ├─ reasoning_node: Build context + call MedGemma (Ollama)
+│  │    → AI medical response
+│  └─ safety_check: Validate + clean response
 └─ Return: {response, metadata}
 
 ↓
@@ -562,20 +540,24 @@ Step 6: Orchestrator Service
 Step 7: Database Storage
 await db.save_conversation(
   session_id="uuid-123",
-  patient_id="Adam631...",
+  patient_id="Adam631_...",
   message="What is this rash?",
   response="Based on the image analysis...",
   metadata={
-    "input_type": "multimodal",
+    "input_type": "image",
     "tools_used": ["analyze_skin_image"],
-    "image_analysis": {...}
+    "emergency_detected": false,
+    "image_analysis": {
+      "class_name": "Eczema/Dermatitis",
+      "confidence": 0.87
+    }
   }
 )
 
 ↓
 
 Step 8: Middleware Stack (Response Phase)
-├─ Security Headers: Add CSP, XSS protection
+├─ Security Headers: Add CSP, XSS protection, HSTS
 ├─ Rate Limiter: Add rate limit headers
 ├─ Logging: Log response (200, 3.245s)
 └─ CORS: Ensure CORS headers present
@@ -584,39 +566,29 @@ Step 8: Middleware Stack (Response Phase)
 
 Step 9: Client Response
 HTTP/1.1 200 OK
-Headers:
-  Content-Type: application/json
-  X-Request-ID: 1771221106.210276
-  X-Process-Time: 3.245
-  X-RateLimit-Remaining-Minute: 14
-Body:
 {
-  "response": "Based on the image analysis, this appears to be a fungal infection with 58.7% confidence. The affected area shows characteristics consistent with dermatophytosis. However, this is an AI classification and I recommend consulting with a dermatologist for proper diagnosis and treatment. Are you experiencing any itching, redness, or scaling in the area?",
+  "response": "Based on the image analysis, this appears to be Eczema/Dermatitis with 87% confidence...",
   "session_id": "uuid-123",
   "timestamp": "2024-01-15T14:30:28Z",
   "metadata": {
-    "input_type": "multimodal",
+    "input_type": "image",
     "tools_used": ["analyze_skin_image"],
     "emergency_detected": false,
-    "image_analysis": {
-      "class_name": "Fungal_Infections",
-      "confidence": 0.587,
-      "all_probabilities": {...}
-    }
+    "image_analysis": {...}
   }
 }
 ```
 
-**Timeline:**
+**Processing Timeline:**
 ```
 0.000s: Request received
 0.001s: Middleware processing
-0.002s: Authentication
+0.002s: Authentication + session check
 0.010s: File validation & save
 0.015s: Orchestrator starts
-0.500s: Image analysis completes
-1.000s: Ollama (LLM) processing
-3.200s: Response generated
+0.200s: Image analysis (Derm Foundation + XGBoost)
+1.000s: Medical Doc RAG retrieval (optional for image queries)
+3.200s: MedGemma (Ollama) response generated
 3.240s: Database save
 3.245s: Response sent
 ```
@@ -628,105 +600,83 @@ Body:
 ### Authentication Flow
 
 ```
-┌────────┐                                             ┌────────┐
-│ Client │                                             │ Server │
-└───┬────┘                                             └───┬────┘
-    │                                                      │
-    │  POST /api/auth/login                               │
-    │  Body: {patient_id: "Adam631..."}                   │
-    ├─────────────────────────────────────────────────────>│
-    │                                                      │
-    │                                      Validate Format │
-    │                                      Generate UUID   │
-    │                                      Create Session  │
-    │                                      (MongoDB)       │
-    │                                      Generate JWT:   │
-    │                                        Payload: {    │
-    │                                          patient_id  │
-    │                                          session_id  │
-    │                                          exp         │
-    │                                        }             │
-    │                                        Sign(HS256)   │
-    │                                                      │
-    │  200 OK                                              │
-    │  {access_token, session_id, expires_in}              │
-    │<─────────────────────────────────────────────────────┤
-    │                                                      │
-    │  Store token in: localStorage/memory                 │
-    │                                                      │
-    │  POST /api/chat/message                              │
-    │  Headers: Authorization: Bearer <token>              │
-    ├─────────────────────────────────────────────────────>│
-    │                                                      │
-    │                                      Decode JWT      │
-    │                                      Verify Sig      │
-    │                                      Check Exp       │
-    │                                      Verify Session  │
-    │                                      (MongoDB)       │
-    │                                      Process...      │
-    │                                                      │
-    │  200 OK                                              │
-    │  {response, ...}                                     │
-    │<─────────────────────────────────────────────────────┤
+Client                                              Server
+  │                                                    │
+  │  POST /api/auth/login {patient_id}                │
+  ├───────────────────────────────────────────────────►│
+  │                                    Validate Format │
+  │                                    Generate UUID   │
+  │                                    Create Session  │
+  │                                     (MongoDB)      │
+  │                                    Generate JWT:   │
+  │                                     {patient_id,   │
+  │                                      session_id,   │
+  │                                      exp} HS256    │
+  │  200 OK {access_token, session_id, expires_in}    │
+  │◄───────────────────────────────────────────────────┤
+  │                                                    │
+  │  POST /api/chat/message                           │
+  │  Authorization: Bearer <token>                    │
+  ├───────────────────────────────────────────────────►│
+  │                                    Decode JWT      │
+  │                                    Verify Sig      │
+  │                                    Check Exp       │
+  │                                    Verify Session  │
+  │                                    (MongoDB)       │
+  │                                    Process...      │
+  │  200 OK {response, ...}                           │
+  │◄───────────────────────────────────────────────────┤
 ```
 
 ### Chat Message Flow (Detailed)
 
 ```
-Client                Backend              Orchestrator        External Services
-  │                     │                       │                     │
-  │  Chat Request       │                       │                     │
-  ├────────────────────>│                       │                     │
-  │                     │                       │                     │
-  │                     │ Verify Auth           │                     │
-  │                     ├──────────┐            │                     │
-  │                     │          │            │                     │
-  │                     │<─────────┘            │                     │
-  │                     │                       │                     │
-  │                     │ process_message()     │                     │
-  │                     ├──────────────────────>│                     │
-  │                     │                       │                     │
-  │                     │                       │ Input Router        │
-  │                     │                       ├────────┐            │
-  │                     │                       │        │            │
-  │                     │                       │<───────┘            │
-  │                     │                       │                     │
-  │                     │                       │ (If image)          │
-  │                     │                       │ Image Analysis      │
-  │                     │                       ├────────────────────>│
-  │                     │                       │                     │ Image Tool
-  │                     │                       │ Analysis Result     │
-  │                     │                       │<────────────────────┤
-  │                     │                       │                     │
-  │                     │                       │ (If history needed) │
-  │                     │                       │ RAG Retrieval       │
-  │                     │                       ├────────────────────>│
-  │                     │                       │                     │ Patient DB
-  │                     │                       │ Medical History     │
-  │                     │                       │<────────────────────┤
-  │                     │                       │                     │
-  │                     │                       │ LLM Call            │
-  │                     │                       ├────────────────────>│
-  │                     │                       │                     │ Ollama
-  │                     │                       │                     │ (MedGemma)
-  │                     │                       │ AI Response         │
-  │                     │                       │<────────────────────┤
-  │                     │                       │                     │
-  │                     │                       │ Safety Check        │
-  │                     │                       ├────────┐            │
-  │                     │                       │        │            │
-  │                     │                       │<───────┘            │
-  │                     │                       │                     │
-  │                     │ {response, metadata}  │                     │
-  │                     │<──────────────────────┤                     │
-  │                     │                       │                     │
-  │                     │ Save to MongoDB       │                     │
-  │                     ├──────────┐            │                     │
-  │                     │          │            │                     │
-  │                     │<─────────┘            │                     │
-  │                     │                       │                     │
-  │  Response           │                       │                     │
-  │<────────────────────┤                       │                     │
+Client              Backend           Orchestrator         External Services
+  │                   │                    │                      │
+  │  Chat Request     │                    │                      │
+  ├──────────────────►│                    │                      │
+  │                   │ Verify Auth        │                      │
+  │                   ├─────┐             │                      │
+  │                   │◄────┘             │                      │
+  │                   │ process_message() │                      │
+  │                   ├───────────────────►                      │
+  │                   │                   │ input_router          │
+  │                   │                   ├──────┐               │
+  │                   │                   │◄─────┘               │
+  │                   │                   │ [if image]            │
+  │                   │                   │ process_image         │
+  │                   │                   ├──────────────────────►│
+  │                   │                   │                       │ DermFoundation
+  │                   │                   │                       │ + XGBoost
+  │                   │                   │ Analysis Result       │
+  │                   │                   │◄──────────────────────┤
+  │                   │                   │ [if text/voice]       │
+  │                   │                   │ medical_doc_rag       │
+  │                   │                   ├──────────────────────►│
+  │                   │                   │                       │ LlamaIndex
+  │                   │                   │ Doc Context           │
+  │                   │                   │◄──────────────────────┤
+  │                   │                   │ [if history query]    │
+  │                   │                   │ call_tool (FAISS RAG) │
+  │                   │                   ├──────────────────────►│
+  │                   │                   │                       │ FAISS Patient
+  │                   │                   │ Medical History       │
+  │                   │                   │◄──────────────────────┤
+  │                   │                   │ LLM Call (Ollama)     │
+  │                   │                   ├──────────────────────►│
+  │                   │                   │                       │ MedGemma 4B
+  │                   │                   │ AI Response           │
+  │                   │                   │◄──────────────────────┤
+  │                   │                   │ safety_check          │
+  │                   │                   ├──────┐               │
+  │                   │                   │◄─────┘               │
+  │                   │ {response, meta}  │                      │
+  │                   │◄──────────────────┤                      │
+  │                   │ Save MongoDB      │                      │
+  │                   ├─────┐             │                      │
+  │                   │◄────┘             │                      │
+  │  Response         │                   │                      │
+  │◄──────────────────┤                   │                      │
 ```
 
 ---
@@ -736,42 +686,42 @@ Client                Backend              Orchestrator        External Services
 ### Defense in Depth (6 Layers)
 
 **Layer 1: Network Security**
-- CORS whitelist
-- Rate limiting (DDoS protection)
-- HTTPS enforcement (production)
+- CORS whitelist (only configured frontend origins)
+- Rate limiting — 20 req/min, 100 req/hour (DDoS protection)
+- HTTPS enforcement (production via HSTS header)
 
 **Layer 2: Input Validation**
-- Pydantic schemas (automatic validation)
-- File type verification (extension + MIME)
-- Size limits enforcement
-- SQL injection prevention
-- XSS pattern filtering
+- Pydantic schemas (automatic type + format validation)
+- File type verification (extension + MIME type + magic bytes)
+- Size limits enforcement (10 MB images, 50 MB audio)
+- Patient ID regex validation before any processing
+- XSS pattern filtering in inputs (`guardrails.sanitize_input()`)
 
 **Layer 3: Authentication & Authorization**
-- JWT token-based authentication
-- Session validation on each request
-- Token expiration (configurable)
-- Patient-specific data access
+- JWT token-based authentication (HS256)
+- MongoDB session validation on every request
+- Token expiration (60 min JWT, 30 min session TTL)
+- Patient-specific data access — per-patient FAISS isolation
 
 **Layer 4: Content Security**
-- Security headers (CSP, XSS protection)
-- Path traversal prevention
+- Security headers: CSP, X-Frame-Options, X-XSS-Protection, HSTS
+- Path traversal prevention in file handling
 - File integrity checking (SHA256)
 
 **Layer 5: Business Logic Security**
-- Medical disclaimer enforcement
-- Emergency detection
-- No definitive diagnoses
-- Privacy protection (patient data isolation)
+- Medical disclaimer enforcement (soft violations)
+- Emergency detection — bypasses normal LLM pipeline for immediate safety response
+- No definitive diagnoses — prohibited phrase hard-violation replacement
+- Privacy protection — LLM output checked for cross-patient data leakage
 
 **Layer 6: Audit & Monitoring**
-- Request logging with IDs
-- Error tracking
-- Rate limit violations logging
+- Request logging with unique IDs and response timing
+- Error tracking with stack traces
+- Rate limit violation logging
 
-### Authentication Implementation
+### JWT Token Implementation
 
-**JWT Token Generation:**
+**Token Generation:**
 ```python
 from jose import jwt
 from datetime import datetime, timedelta
@@ -780,24 +730,14 @@ def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=60)
     to_encode.update({"exp": expire})
-    
-    return jwt.encode(
-        to_encode,
-        SECRET_KEY,          # From .env
-        algorithm="HS256"
-    )
+    return jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
 ```
 
-**JWT Token Verification:**
+**Token Verification:**
 ```python
 def verify_token(token: str):
     try:
-        payload = jwt.decode(
-            token,
-            SECRET_KEY,
-            algorithms=["HS256"]
-        )
-        # Check expiration automatically
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         patient_id = payload.get("patient_id")
         session_id = payload.get("session_id")
         return TokenData(patient_id, session_id)
@@ -822,100 +762,101 @@ await db.extend_session(session_id, minutes=30)
 
 ### 1. Asynchronous I/O
 
-**Why:** Python's default I/O is blocking (CPU waits)  
-**Solution:** Use `async/await` for I/O operations
+**Pattern:** Use `async/await` for all I/O operations
 
-**Example:**
 ```python
-# Slow (blocking)
-def save_file(data):
-    with open("file.txt", "w") as f:
-        f.write(data)  # CPU waits here
-
-# Fast (async)
+# File save (async)
 async def save_file(data):
     async with aiofiles.open("file.txt", "w") as f:
-        await f.write(data)  # CPU can handle other requests
+        await f.write(data)  # CPU handles other requests during I/O
+
+# Database (Motor async driver)
+conversations = await cursor.to_list(length=50)
 ```
 
-### 2. Connection Pooling
+### 2. Executor for Synchronous Code
 
-**MongoDB:**
+LangGraph's `graph.invoke()` is synchronous. To avoid blocking the async FastAPI event loop:
+
 ```python
-# Motor automatically pools connections
+import asyncio
+
+async def process_message(self, ...):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,  # Default thread pool
+        self.agent.process_message,
+        patient_id, text_input, image_path, audio_path
+    )
+    return result
+```
+
+### 3. Connection Pooling
+
+**MongoDB (Motor):**
+```python
 client = AsyncIOMotorClient(
     "mongodb://localhost:27017",
     maxPoolSize=50  # Up to 50 concurrent connections
 )
 ```
 
-**HTTP (Ollama):**
+**HTTP (Ollama client reuse):**
 ```python
-# Reuse HTTP client (avoid connection overhead)
-self._http_client = httpx.AsyncClient(
-    timeout=httpx.Timeout(30.0)
-)
-# Reuse for all requests
+self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
+# Reused across all requests — avoids connection overhead
 ```
 
-### 3. Lazy Loading
+### 4. Lazy Loading
 
-**Orchestrator:**
-```python
-# Not initialized at startup
-self.agent = None
-
-# Initialized on first use
-def _get_agent(self):
-    if self.agent is None:
-        self.agent = MedicalChatbotAgent()
-    return self.agent
-```
-
-**Benefits:**
-- Faster startup
-- Memory saved if not used
-- Models loaded only when needed
-
-### 4. Background Tasks
-
-**Scheduler Pattern:**
-```python
-# Run in background (doesn't block API)
-asyncio.create_task(cleanup_old_files())
-```
-
-**Benefits:**
-- Cleanup doesn't slow down requests
-- Maintenance runs automatically
-- Resource utilization optimized
-
-### 5. Caching
-
-**Model Caching:**
+**Orchestrator Service (singleton):**
 ```python
 @lru_cache()
 def get_orchestrator_service():
     return OrchestratorService()  # Created once, reused
 ```
 
-**Session Caching:**
+**MedicalDocRAGService (singleton + lazy-load):**
 ```python
-# In-memory session tracking (faster than DB)
-self.sessions = {
-    "session-id": {...}  # Quick lookup
-}
+# Not initialized at startup — loads on first query
+_instance: Optional[MedicalDocRAGService] = None
+
+@classmethod
+def get_instance(cls, config) -> "MedicalDocRAGService":
+    if cls._instance is None:
+        cls._instance = cls(config)
+    return cls._instance
 ```
 
-### 6. Rate Limiting
+**Benefits:**
+- Fast API startup (no model loading at boot)
+- Memory saved if feature never used
+- Models loaded only on first actual query
 
-**Purpose:** Prevent resource exhaustion  
-**Implementation:** Sliding window
+### 5. Background Task Offloading
 
-**Effect on Performance:**
-- Protects against DDoS
-- Ensures fair resource distribution
-- Prevents single user from consuming all resources
+```python
+# Maintenance tasks run in background without blocking API responses
+asyncio.create_task(cleanup_old_files())       # 60-minute interval
+asyncio.create_task(cleanup_sessions())         # 30-minute interval
+asyncio.create_task(cleanup_old_db_records())  # 120-minute interval
+```
+
+### 6. Settings Caching
+
+```python
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings()  # pydantic-settings loads and validates .env once
+```
+
+### 7. Rate Limiting
+
+Sliding-window rate limiting prevents resource exhaustion:
+
+- Protects against DDoS and accidental feedback loops
+- Ensures fair resource distribution across patients
+- Prevents LLM from being overloaded by a single user
 
 ---
 
@@ -923,46 +864,54 @@ self.sessions = {
 
 ### Architecture Highlights
 
-1. **Layered Design**: Clear separation of concerns
-2. **Async-First**: Non-blocking I/O throughout
-3. **Security**: 6-layer defense in depth
-4. **Scalability**: Connection pooling, caching, background tasks
-5. **Maintainability**: Well-organized, documented code
-6. **Production-Ready**: Logging, monitoring, error handling
+1. **Layered Design**: Clear separation — middleware, routers, services, external integrations
+2. **Async-First**: Non-blocking I/O throughout; sync LangGraph graph runs in thread executor
+3. **Security**: 6-layer defense in depth from network to business logic
+4. **Scalability**: Connection pooling, singleton caching, background tasks
+5. **Maintainability**: Well-organised, documented code with separate concerns
+6. **Production-Ready**: Logging, error handling, scheduled cleanup, health endpoint
 
 ### Key Components
 
 | Component | Responsibility | Technology |
 |-----------|---------------|------------|
-| **API Gateway** | Request routing, security | FastAPI + Middleware |
-| **Auth System** | Authentication, sessions | JWT + MongoDB |
-| **Orchestrator** | AI workflow coordination | LangGraph |
+| **API Gateway** | Request routing, security, rate limiting | FastAPI + 5 Middleware layers |
+| **Auth System** | Authentication, session management | JWT (python-jose) + MongoDB |
+| **Orchestrator** | AI workflow coordination | LangGraph (StateGraph) |
 | **File Handler** | Upload, validation, cleanup | aiofiles + python-magic |
-| **Database** | Persistence, sessions | MongoDB (Motor) |
+| **Database** | Conversations, sessions | MongoDB (Motor async driver) |
 | **Background** | Maintenance tasks | asyncio scheduler |
+| **Medical Doc RAG** | Clinical knowledge retrieval | LlamaIndex + bge-large-en-v1.5 |
+| **Patient RAG** | Personal FHIR record retrieval | FAISS + nomic-embed-text |
 
-### Request Processing
+### Request Processing Times
 
-1. **Receive** (< 1ms): Middleware stack
-2. **Authenticate** (< 10ms): JWT verification
-3. **Process** (1-5s): AI orchestration
-4. **Store** (< 50ms): Database save
-5. **Respond** (< 1ms): Middleware stack
-
-**Total:** ~1-5 seconds per request (mostly AI processing)
+| Stage | Typical Duration |
+|-------|----------------|
+| Middleware | < 1 ms |
+| Authentication | < 10 ms |
+| File validation & save | < 10 ms |
+| Medical Doc RAG retrieval | ~100–500 ms (cached) / up to 5 min (first load) |
+| Image analysis (Derm + XGBoost) | ~200–500 ms |
+| MedGemma LLM (Ollama) | 1–5 seconds |
+| Database save | < 50 ms |
+| **Total** | **~1–6 seconds per request** |
 
 ### Scalability
 
 **Horizontal Scaling:**
-- Multiple Uvicorn workers
-- Load balancer (Nginx)
-- Stateless design (sessions in DB)
+- Multiple Uvicorn workers with Gunicorn
+- Load balancer (Nginx, Caddy)
+- Stateless design (all session state in MongoDB)
+- ⚠️ Rate limiting and LLM model require shared-resource coordination at scale
 
 **Vertical Scaling:**
-- Async I/O (handle 10,000+ concurrent connections)
+- Async I/O (thousands of concurrent connections)
 - Connection pooling
 - Background task offloading
 
 ---
 
-**This architecture supports production deployment with high availability, security, and performance.**
+**This architecture supports production deployment with high availability, multi-layer security, and performance suitable for hospital-grade workloads.**
+
+*Updated: 2026-04-13 | Vitalis v1.1*
