@@ -140,8 +140,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.minute_requests: Dict[str, list] = defaultdict(list)
         self.hour_requests: Dict[str, list] = defaultdict(list)
         
-        # Excluded paths (health checks, docs)
+        # Excluded paths (health checks, docs, and ALL admin endpoints)
         self.excluded_paths = {"/", "/api/health", "/api/docs", "/api/redoc", "/api/openapi.json"}
+        self.excluded_prefixes = ("/api/admin/", "/api/admin")
     
     def _clean_old_requests(self, requests_list: list, time_window: timedelta):
         """Remove requests older than time window"""
@@ -185,8 +186,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return True, ""
     
     async def dispatch(self, request: Request, call_next):
-        # Skip rate limiting for excluded paths
-        if request.url.path in self.excluded_paths:
+        # Skip rate limiting for excluded paths and admin endpoints
+        if request.url.path in self.excluded_paths or request.url.path.startswith(self.excluded_prefixes):
             return await call_next(request)
         
         # Get client IP

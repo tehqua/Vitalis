@@ -7,6 +7,12 @@
 
 import React, { useState } from "react";
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL
+  ? (import.meta.env.VITE_API_BASE_URL.startsWith('http')
+      ? import.meta.env.VITE_API_BASE_URL
+      : `https://${import.meta.env.VITE_API_BASE_URL}`)
+  : 'http://localhost:8000';
+
 const styles = {
   root: {
     position: "relative",
@@ -238,6 +244,84 @@ const styles = {
     alignItems: "center",
     gap: "0.5rem",
   },
+  overlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(15,23,42,0.45)",
+    backdropFilter: "blur(4px)",
+    zIndex: 50,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "1rem",
+  },
+
+  modal: {
+    background: "#fff",
+    borderRadius: "1.25rem",
+    padding: "2rem",
+    width: "100%",
+    maxWidth: 460,
+    boxShadow: "0 20px 60px -10px rgba(15,23,42,0.25)",
+    position: "relative",
+  },
+
+  modalTitle: {
+    fontSize: "1rem",
+    fontWeight: 700,
+    color: "#0f172a",
+    marginBottom: "0.25rem",
+    fontFamily: "var(--font-body)",
+  },
+
+  modalSubtitle: {
+    fontSize: "0.8125rem",
+    color: "#64748b",
+    marginBottom: "1.25rem",
+    lineHeight: 1.5,
+    fontFamily: "var(--font-body)",
+  },
+
+  modalGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: "0.75rem",
+  },
+
+  modalInput: {
+    width: "100%",
+    padding: "0.625rem 0.75rem",
+    border: "1px solid #e2e8f0",
+    borderRadius: "0.625rem",
+    fontSize: "0.875rem",
+    fontFamily: "var(--font-body)",
+    outline: "none",
+    boxSizing: "border-box",
+    transition: "border-color 150ms ease",
+  },
+
+  modalLabel: {
+    display: "block",
+    fontSize: "0.6875rem",
+    fontWeight: 600,
+    letterSpacing: "0.07em",
+    textTransform: "uppercase",
+    color: "#475569",
+    marginBottom: "0.25rem",
+    fontFamily: "var(--font-body)",
+  },
+
+  successBox: {
+    background: "#f0fdf9",
+    border: "1px solid #99f6e4",
+    borderRadius: "0.75rem",
+    padding: "1rem",
+    textAlign: "center",
+    fontSize: "0.875rem",
+    color: "#0f766e",
+    fontFamily: "var(--font-body)",
+    lineHeight: 1.6,
+  },
 };
 
 export default function LoginPage({ onLogin }) {
@@ -246,10 +330,53 @@ export default function LoginPage({ onLogin }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // Forgot ID modal state
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotForm, setForgotForm] = useState({
+    name: "", dob: "", phone: "", email: "", visit_date: "", department: "", notes: "",
+  });
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotSuccess, setForgotSuccess] = useState("");
+  const [forgotError, setForgotError] = useState("");
+
+  const handleForgotChange = (field) => (e) =>
+    setForgotForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  const handleForgotSubmit = async (e) => {
+    e.preventDefault();
+    setForgotLoading(true);
+    setForgotError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/forgot-id`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(forgotForm),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setForgotSuccess(
+          `Your request (${data.ticket_id}) has been submitted. A clinic staff will contact you shortly via phone or email.`
+        );
+      } else {
+        setForgotError(data.detail || "Submission failed. Please try again.");
+      }
+    } catch {
+      setForgotError("Cannot reach server. Please try again later.");
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const closeForgot = () => {
+    setShowForgot(false);
+    setForgotSuccess("");
+    setForgotError("");
+    setForgotForm({ name: "", dob: "", phone: "", email: "", visit_date: "", department: "", notes: "" });
+  };
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!patientId.trim() || loading) return;
-
     setLoading(true);
     setError("");
     try {
@@ -367,11 +494,17 @@ export default function LoginPage({ onLogin }) {
             )}
           </button>
 
-          <button type="button" style={styles.forgotLink}>
+          <button
+            type="button"
+            style={styles.forgotLink}
+            onClick={() => setShowForgot(true)}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "#0d9488")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "#64748b")}
+          >
             <span className="material-symbols-outlined" style={{ fontSize: "1rem", color: "#94a3b8" }}>
               help
             </span>
-            Help: Forgot ID?
+            Help: Forgot your Patient ID?
           </button>
         </form>
 
@@ -400,6 +533,84 @@ export default function LoginPage({ onLogin }) {
           to   { transform: rotate(360deg); }
         }
       `}</style>
+
+      {/* Forgot ID Modal */}
+      {showForgot && (
+        <div style={styles.overlay} onClick={closeForgot}>
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={closeForgot}
+              style={{ position: "absolute", top: 16, right: 16, background: "none", border: "none", cursor: "pointer", color: "#94a3b8", fontSize: 20 }}
+            >
+              <span className="material-symbols-outlined">close</span>
+            </button>
+
+            <p style={styles.modalTitle}>Forgot Patient ID?</p>
+            <p style={styles.modalSubtitle}>
+              Fill in your details below. A clinic staff member will look up your Patient ID
+              and contact you within 1 business day.
+            </p>
+
+            {forgotSuccess ? (
+              <div style={styles.successBox}>
+                <span className="material-symbols-outlined" style={{ fontSize: 28, display: "block", marginBottom: 8 }}>check_circle</span>
+                {forgotSuccess}
+              </div>
+            ) : (
+              <form onSubmit={handleForgotSubmit}>
+                {forgotError && (
+                  <div style={{ ...styles.errorBox, marginBottom: "1rem" }}>
+                    <span className="material-symbols-outlined" style={{ fontSize: "1rem" }}>error</span>
+                    {forgotError}
+                  </div>
+                )}
+                <div style={styles.modalGrid}>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <label style={styles.modalLabel}>Full Name *</label>
+                    <input style={styles.modalInput} required value={forgotForm.name} onChange={handleForgotChange("name")} placeholder="Nguyen Van A" />
+                  </div>
+                  <div>
+                    <label style={styles.modalLabel}>Date of Birth *</label>
+                    <input style={styles.modalInput} type="date" required value={forgotForm.dob} onChange={handleForgotChange("dob")} />
+                  </div>
+                  <div>
+                    <label style={styles.modalLabel}>Phone *</label>
+                    <input style={styles.modalInput} required value={forgotForm.phone} onChange={handleForgotChange("phone")} placeholder="+84 912 345 678" />
+                  </div>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <label style={styles.modalLabel}>Email *</label>
+                    <input style={styles.modalInput} type="email" required value={forgotForm.email} onChange={handleForgotChange("email")} placeholder="your@email.com" />
+                  </div>
+                  <div>
+                    <label style={styles.modalLabel}>Approximate Visit Date *</label>
+                    <input style={styles.modalInput} type="date" required value={forgotForm.visit_date} onChange={handleForgotChange("visit_date")} />
+                  </div>
+                  <div>
+                    <label style={styles.modalLabel}>Department</label>
+                    <input style={styles.modalInput} value={forgotForm.department} onChange={handleForgotChange("department")} placeholder="e.g. Cardiology" />
+                  </div>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <label style={styles.modalLabel}>Additional Notes</label>
+                    <textarea
+                      style={{ ...styles.modalInput, minHeight: 64, resize: "vertical" }}
+                      value={forgotForm.notes}
+                      onChange={handleForgotChange("notes")}
+                      placeholder="Any other info that might help us find your record..."
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={forgotLoading}
+                  style={{ ...styles.button, marginTop: "1rem", opacity: forgotLoading ? 0.7 : 1 }}
+                >
+                  {forgotLoading ? "Submitting..." : "Submit Request"}
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

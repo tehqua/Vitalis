@@ -6,7 +6,12 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import List
 from functools import lru_cache
+from pathlib import Path
 import os
+
+# Always resolve .env relative to this file (backend/.env),
+# NOT relative to CWD (which changes based on where uvicorn is run from)
+_ENV_FILE = Path(__file__).parent / ".env"
 
 
 class Settings(BaseSettings):
@@ -90,8 +95,9 @@ class Settings(BaseSettings):
     )
     
     class Config:
-        env_file = ".env"
+        env_file = str(_ENV_FILE)   # absolute path → backend/.env, always
         case_sensitive = True
+        extra = "ignore"            # skip env vars not declared in Settings
 
 
 @lru_cache()
